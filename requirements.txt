@@ -1,0 +1,9 @@
+ccxt
+asyncio
+websockets
+psycopg2-binary
+pandas
+pandas_ta
+fastapi
+uvicorn
+python-dotenv
