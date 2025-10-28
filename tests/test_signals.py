@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import pandas as pd
 import sys
 import os
@@ -7,39 +7,46 @@ import os
 # Add the parent directory to the path to allow imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from signals.engine import generate_signal
+from signals.engine import generate_signals
 
 class TestSignalEngine(unittest.TestCase):
 
-    @patch('signals.engine.get_trade_data')
-    def test_generate_signal_buy(self, mock_get_trade_data):
-        # Create a sample dataframe where the short MA is greater than the long MA
-        data = {'price': [i for i in range(100, 200)]}
-        df = pd.DataFrame(data)
-        mock_get_trade_data.return_value = df
+    @patch('signals.strategies.rsi.generate_signal')
+    @patch('signals.strategies.macd.generate_signal')
+    def test_generate_signals_buy(self, mock_macd_signal, mock_rsi_signal):
+        # Mock strategy outputs
+        mock_rsi_signal.return_value = ('buy', 0.7)
+        mock_macd_signal.return_value = ('buy', 0.6)
 
-        signal = generate_signal()
-        self.assertEqual(signal, 'buy')
+        signals = generate_signals('BTC/USDT')
 
-    @patch('signals.engine.get_trade_data')
-    def test_generate_signal_sell(self, mock_get_trade_data):
-        # Create a sample dataframe where the short MA is less than the long MA
-        data = {'price': [i for i in range(200, 100, -1)]}
-        df = pd.DataFrame(data)
-        mock_get_trade_data.return_value = df
+        self.assertEqual(len(signals), 2)
+        self.assertIn({'strategy': 'rsi', 'direction': 'buy', 'confidence': 0.7, 'symbol': 'BTC/USDT'}, signals)
+        self.assertIn({'strategy': 'macd', 'direction': 'buy', 'confidence': 0.6, 'symbol': 'BTC/USDT'}, signals)
 
-        signal = generate_signal()
-        self.assertEqual(signal, 'sell')
+    @patch('signals.strategies.rsi.generate_signal')
+    @patch('signals.strategies.macd.generate_signal')
+    def test_generate_signals_sell(self, mock_macd_signal, mock_rsi_signal):
+        # Mock strategy outputs
+        mock_rsi_signal.return_value = ('sell', 0.7)
+        mock_macd_signal.return_value = ('sell', 0.6)
 
-    @patch('signals.engine.get_trade_data')
-    def test_generate_signal_hold(self, mock_get_trade_data):
-        # Create a sample dataframe with not enough data
-        data = {'price': [100, 101, 102]}
-        df = pd.DataFrame(data)
-        mock_get_trade_data.return_value = df
+        signals = generate_signals('BTC/USDT')
 
-        signal = generate_signal()
-        self.assertEqual(signal, 'hold')
+        self.assertEqual(len(signals), 2)
+        self.assertIn({'strategy': 'rsi', 'direction': 'sell', 'confidence': 0.7, 'symbol': 'BTC/USDT'}, signals)
+        self.assertIn({'strategy': 'macd', 'direction': 'sell', 'confidence': 0.6, 'symbol': 'BTC/USDT'}, signals)
+
+    @patch('signals.strategies.rsi.generate_signal')
+    @patch('signals.strategies.macd.generate_signal')
+    def test_generate_signals_hold(self, mock_macd_signal, mock_rsi_signal):
+        # Mock strategy outputs
+        mock_rsi_signal.return_value = ('hold', 0.0)
+        mock_macd_signal.return_value = ('hold', 0.0)
+
+        signals = generate_signals('BTC/USDT')
+
+        self.assertEqual(len(signals), 0)
 
 if __name__ == '__main__':
     unittest.main()

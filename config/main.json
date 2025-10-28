@@ -1,0 +1,27 @@
+{
+  "ingestion": {
+    "exchange": "kucoin",
+    "symbols": [
+      "BTC/USDT",
+      "ETH/USDT"
+    ]
+  },
+  "strategies": {
+    "rsi": {
+      "enabled": true,
+      "overbought_threshold": 70,
+      "oversold_threshold": 30
+    },
+    "macd": {
+      "enabled": true
+    }
+  },
+  "portfolio": {
+    "default_portfolio_name": "default",
+    "initial_cash": 100000
+  },
+  "llm": {
+    "model": "gpt-4-turbo",
+    "system_prompt": "You are a Chief Trading Analyst providing clear, concise interpretations of quantitative signals for expert traders."
+  }
+}
