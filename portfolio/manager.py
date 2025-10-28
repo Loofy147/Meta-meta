@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from risk.validator import RiskValidator
+from event_bus.publisher import EventPublisher
 
 load_dotenv()
 
@@ -57,10 +58,11 @@ def get_portfolio_status(portfolio_name='default'):
         'positions': positions
     }
 
-def execute_trade(portfolio_name, symbol, side, quantity):
+def execute_trade(portfolio_name, symbol, side, quantity, signal_id):
     """Executes a trade and updates the portfolio in the database after passing risk validation."""
     conn = get_db_connection()
     cursor = conn.cursor()
+    publisher = EventPublisher()
 
     # Get current price
     cursor.execute("SELECT close FROM candles_1m WHERE symbol = %s ORDER BY time DESC LIMIT 1;", (symbol,))
@@ -111,11 +113,23 @@ def execute_trade(portfolio_name, symbol, side, quantity):
     # Record the trade
     cursor.execute("""
         INSERT INTO executed_trades (portfolio_id, symbol, quantity, price, side, timestamp)
-        VALUES (%s, %s, %s, %s, %s, %s);
+        VALUES (%s, %s, %s, %s, %s, %s) RETURNING id;
     """, (portfolio_id, symbol, quantity, price, side, datetime.now(timezone.utc)))
+    trade_id = cursor.fetchone()[0]
 
     conn.commit()
     conn.close()
+
+    # Publish the executed trade to the event bus
+    publisher.publish('executed_trades', {
+        'trade_id': trade_id,
+        'signal_id': signal_id,
+        'symbol': symbol,
+        'side': side,
+        'quantity': quantity,
+        'price': price
+    })
+
     print(f"Executed {side} of {quantity} {symbol} at {price}.")
 
 if __name__ == '__main__':

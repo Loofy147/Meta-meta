@@ -9,6 +9,8 @@ import psycopg2
 # Add the parent directory to the path to allow imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from signals.engine import generate_signals
+from event_bus.publisher import EventPublisher
+from config.manager import get_config
 
 def get_db_connection():
     """Establishes and returns a database connection."""
@@ -19,80 +21,79 @@ def get_db_connection():
         password=os.getenv("DB_PASSWORD", "password")
     )
 
-def get_higher_timeframe_trend(symbol, timeframe='1h'):
+def get_strategy_weights():
     """
-    Determines the trend on a higher timeframe by checking the MACD.
-    Returns 'buy' for uptrend, 'sell' for downtrend, 'hold' otherwise.
+    Fetches strategy performance and calculates dynamic weights.
     """
     conn = get_db_connection()
     try:
-        query = f"SELECT macd, macds FROM features_{timeframe} WHERE symbol = %s ORDER BY time DESC LIMIT 1;"
-        df = pd.read_sql(query, conn, params=(symbol,))
-        if not df.empty and df['macd'].iloc[0] > df['macds'].iloc[0]:
-            return 'buy'
-        elif not df.empty and df['macd'].iloc[0] < df['macds'].iloc[0]:
-            return 'sell'
-        return 'hold'
+        query = "SELECT strategy_name, hit_rate FROM strategy_performance;"
+        df = pd.read_sql(query, conn)
+
+        if df.empty:
+            return {}
+
+        weights = {row['strategy_name']: row['hit_rate'] for _, row in df.iterrows()}
+        total_hit_rate = sum(weights.values())
+        if total_hit_rate > 0:
+            for name in weights:
+                weights[name] /= total_hit_rate
+        return weights
     finally:
         conn.close()
 
-def aggregate_signals_for_symbol(symbol='BTC/USDT'):
+def aggregate_signals(symbol, strategy_weights):
     """
-    Aggregates signals with a multi-timeframe consensus score.
+    Aggregates signals for a single symbol using adaptive weights.
     """
-    # 1. Get signals from the primary (1m) timeframe
-    signals_1m = generate_signals(symbol)
+    signals = generate_signals(symbol)
 
-    if not signals_1m:
+    if not signals:
         final_direction = 'hold'
         final_confidence = 0.0
     else:
-        # 2. Check for conflicts on the primary timeframe
-        directions_1m = {s['direction'] for s in signals_1m}
-        if 'buy' in directions_1m and 'sell' in directions_1m:
+        directions = {s['direction'] for s in signals}
+        if 'buy' in directions and 'sell' in directions:
             final_direction = 'hold'
             final_confidence = 0.0
         else:
-            # 3. Get trends from higher timeframes
-            trend_15m = get_higher_timeframe_trend(symbol, '15m')
-            trend_1h = get_higher_timeframe_trend(symbol, '1h')
+            weighted_confidence = 0
+            total_weight = 0
+            for s in signals:
+                weight = strategy_weights.get(s['strategy'], 0.1)
+                weighted_confidence += s['confidence'] * weight
+                total_weight += weight
 
-            primary_direction = signals_1m[0]['direction']
+            final_direction = signals[0]['direction']
+            final_confidence = weighted_confidence / total_weight if total_weight > 0 else 0
 
-            # 4. Calculate consensus score
-            weights = {'1m': 0.4, '15m': 0.3, '1h': 0.3}
-            score = 0
-
-            # Add score for primary signal
-            if primary_direction != 'hold':
-                score += weights['1m']
-
-            # Add score for 15m trend alignment
-            if trend_15m == primary_direction:
-                score += weights['15m']
-
-            # Add score for 1h trend alignment
-            if trend_1h == primary_direction:
-                score += weights['1h']
-
-            final_direction = primary_direction
-            final_confidence = score
-
-    final_signal = {
+    return {
         "signal_id": str(uuid.uuid4()),
         "asset": symbol,
         "direction": final_direction,
         "confidence": round(final_confidence, 4),
-        "timeframe": "1m_consensus",
-        "origin": "multi_timeframe_aggregator",
-        "meta": {"contributing_signals_1m": signals_1m},
+        "origin": "adaptive_aggregator",
+        "meta": {"contributing_signals": signals},
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
-    return final_signal
+
+def aggregate_and_publish_signals():
+    """
+    Aggregates signals for all configured symbols and publishes them to the event bus.
+    """
+    config = get_config()
+    ingestion_config = config['ingestion']
+
+    publisher = EventPublisher()
+    strategy_weights = get_strategy_weights()
+
+    for symbol in ingestion_config['symbols']:
+        final_signal = aggregate_signals(symbol, strategy_weights)
+        publisher.publish('aggregated_signals', final_signal)
 
 if __name__ == "__main__":
-    with open('config/main.json', 'r') as f:
-        config = json.load(f)['ingestion']
-
-    for symbol in config['symbols']:
-        print(json.dumps(aggregate_signals_for_symbol(symbol), indent=4))
+    import time
+    print("Starting the adaptive signal aggregator...")
+    while True:
+        aggregate_and_publish_signals()
+        time.sleep(60)

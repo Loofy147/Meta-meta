@@ -11,3 +11,7 @@ openai
 alpaca-trade-api
 redis
 polygon-api-client
+scikit-learn
+lightgbm
+prometheus-client
+structlog

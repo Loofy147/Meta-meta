@@ -1,6 +1,11 @@
-from signals.strategies import rsi, macd, sentiment
+from signals.strategies import rsi, macd, sentiment, ml_strategy
 import json
 import os
+
+# Add the parent directory to the path to allow imports
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.manager import get_config
 
 def generate_signals(symbol='BTC/USDT'):
     """
@@ -10,12 +15,12 @@ def generate_signals(symbol='BTC/USDT'):
         'rsi': rsi.generate_signal,
         'macd': macd.generate_signal,
         'sentiment': sentiment.generate_signal,
+        'ml': ml_strategy.generate_signal,
     }
 
     signals = []
-    # Load strategy configuration
-    with open('config/main.json', 'r') as f:
-        config = json.load(f)['strategies']
+    # Load strategy configuration from the database
+    config = get_config()['strategies']
 
     for name, generate_func in strategies.items():
         if config.get(name, {}).get('enabled', True):
@@ -31,12 +36,9 @@ def generate_signals(symbol='BTC/USDT'):
     return signals
 
 if __name__ == "__main__":
-    with open('config/main.json', 'r') as f:
-        ingestion_config = json.load(f)['ingestion']
-
-    all_signals = []
-    for symbol in ingestion_config['symbols']:
-        all_signals.extend(generate_signals(symbol))
+    # This will now use the config from the database to determine which symbols to process
+    # For simplicity, this example will just use the default
+    all_signals = generate_signals('BTC/USDT')
 
     print("Generated Signals:")
     print(json.dumps(all_signals, indent=4))
