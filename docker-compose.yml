@@ -1,0 +1,53 @@
+version: '3.8'
+services:
+  db:
+    image: timescale/timescaledb:latest-pg14
+    environment:
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis/redis-stack-server:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  app_base:
+    build: .
+    depends_on:
+      - db
+      - redis
+    environment:
+      - DB_HOST=db
+      - DB_PASSWORD=password
+      - REDIS_HOST=redis
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+
+  ingestion:
+    extends: app_base
+    command: python ingestion/data_ingestor.py
+
+  resampler:
+    extends: app_base
+    command: python database/resampler.py
+
+  feature_calculator:
+    extends: app_base
+    command: python features/calculator.py
+
+  dashboard:
+    extends: app_base
+    command: uvicorn dashboard.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+
+volumes:
+  timescaledb_data:
+  redis_data:

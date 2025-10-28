@@ -4,6 +4,11 @@ from dotenv import load_dotenv
 import pandas as pd
 from datetime import datetime, timezone
 
+# Add the parent directory to the path to allow imports
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from risk.validator import RiskValidator
+
 load_dotenv()
 
 def get_db_connection():
@@ -31,16 +36,18 @@ def get_portfolio_status(portfolio_name='default'):
     for symbol, quantity, avg_price in cursor.fetchall():
         # Get current price to calculate P&L
         cursor.execute("SELECT close FROM candles_1m WHERE symbol = %s ORDER BY time DESC LIMIT 1;", (symbol,))
-        current_price = cursor.fetchone()[0]
-        pnl = (current_price - avg_price) * quantity
-        total_pnl += pnl
-        positions.append({
-            'symbol': symbol,
-            'quantity': quantity,
-            'average_entry_price': avg_price,
-            'current_price': current_price,
-            'pnl': pnl
-        })
+        current_price_result = cursor.fetchone()
+        if current_price_result:
+            current_price = current_price_result[0]
+            pnl = (current_price - avg_price) * quantity
+            total_pnl += pnl
+            positions.append({
+                'symbol': symbol,
+                'quantity': quantity,
+                'average_entry_price': avg_price,
+                'current_price': current_price,
+                'pnl': pnl
+            })
 
     conn.close()
     return {
@@ -51,19 +58,29 @@ def get_portfolio_status(portfolio_name='default'):
     }
 
 def execute_trade(portfolio_name, symbol, side, quantity):
-    """Executes a trade and updates the portfolio in the database."""
+    """Executes a trade and updates the portfolio in the database after passing risk validation."""
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # Get current price
+    cursor.execute("SELECT close FROM candles_1m WHERE symbol = %s ORDER BY time DESC LIMIT 1;", (symbol,))
+    price_result = cursor.fetchone()
+    if not price_result:
+        print(f"Could not get current price for {symbol}. Aborting trade.")
+        return
+    price = price_result[0]
+
+    trade_value = price * quantity
+
+    # --- Pre-Execution Guard ---
+    risk_validator = RiskValidator()
+    if not risk_validator.validate_trade(portfolio_name, symbol, trade_value):
+        print(f"Trade for {symbol} failed risk validation. Aborting.")
+        return
 
     # Get portfolio ID and cash
     cursor.execute("SELECT id, cash_balance FROM portfolios WHERE name = %s;", (portfolio_name,))
     portfolio_id, cash_balance = cursor.fetchone()
-
-    # Get current price
-    cursor.execute("SELECT close FROM candles_1m WHERE symbol = %s ORDER BY time DESC LIMIT 1;", (symbol,))
-    price = cursor.fetchone()[0]
-
-    trade_value = price * quantity
 
     if side == 'buy':
         if cash_balance < trade_value:
@@ -101,13 +118,7 @@ def execute_trade(portfolio_name, symbol, side, quantity):
     conn.close()
     print(f"Executed {side} of {quantity} {symbol} at {price}.")
 
-
 if __name__ == '__main__':
     # Example usage
     print("Initial Portfolio Status:")
     print(get_portfolio_status())
-
-    # execute_trade('default', 'BTC/USDT', 'buy', 0.1)
-
-    # print("\\nPortfolio Status after trade:")
-    # print(get_portfolio_status())

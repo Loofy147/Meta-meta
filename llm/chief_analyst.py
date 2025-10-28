@@ -5,8 +5,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Note: This requires an OPENAI_API_KEY to be set in the .env file
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def get_openai_client():
+    """Initializes and returns the OpenAI client, ensuring API key is present."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable not set.")
+    return OpenAI(api_key=api_key)
 
 def generate_analysis(signal):
     """
@@ -30,17 +34,18 @@ def generate_analysis(signal):
     {json.dumps(signal['meta']['contributing_signals'], indent=2)}
 
     **Task:**
-    1.  **Provide a concise analysis** of this trading signal. Explain what the combination of contributing signals (e.g., RSI, MACD) means in simple terms.
-    2.  **Generate a tactical playbook** for a trader acting on this signal. Include key considerations like potential entry points, stop-loss placement, and take-profit targets. Keep it brief and actionable.
+    1.  **Provide a concise analysis** of this trading signal.
+    2.  **Generate a tactical playbook** for a trader acting on this signal.
 
     **Format your response as a JSON object with two keys: "analysis" and "playbook".**
     """
 
     try:
+        client = get_openai_client()
         response = client.chat.completions.create(
-            model="gpt-4-turbo", # Or another suitable model
+            model="gpt-4-turbo",
             messages=[
-                {"role": "system", "content": "You are a Chief Trading Analyst providing clear, concise interpretations of quantitative signals for expert traders."},
+                {"role": "system", "content": "You are a Chief Trading Analyst."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"}
@@ -49,10 +54,10 @@ def generate_analysis(signal):
         analysis_json = json.loads(response.choices[0].message.content)
         return analysis_json
 
-    except Exception as e:
+    except (ValueError, Exception) as e:
         print(f"An error occurred while communicating with the LLM: {e}")
         return {
-            "analysis": "Failed to generate analysis due to an error.",
+            "analysis": "Failed to generate analysis.",
             "playbook": "Could not generate playbook."
         }
 
@@ -63,23 +68,13 @@ if __name__ == '__main__':
         "asset": "BTC/USDT",
         "direction": "buy",
         "confidence": 0.65,
-        "origin": "multi_strategy_aggregator",
         "meta": {
             "contributing_signals": [
-                {"strategy": "rsi", "direction": "buy", "confidence": 0.7, "symbol": "BTC/USDT"},
-                {"strategy": "macd", "direction": "buy", "confidence": 0.6, "symbol": "BTC/USDT"}
+                {"strategy": "rsi", "direction": "buy", "confidence": 0.7},
+                {"strategy": "macd", "direction": "buy", "confidence": 0.6}
             ]
         }
     }
 
-    if not os.getenv("OPENAI_API_KEY"):
-        print("Skipping LLM analysis: OPENAI_API_KEY not found.")
-        print("Using mock response instead.")
-        analysis = {
-            "analysis": "Mock analysis: The RSI indicates the asset is oversold, and the MACD shows a bullish crossover, suggesting strong upward momentum.",
-            "playbook": "Mock playbook: Consider entering a long position near the current price. Set a stop-loss below the recent swing low and a take-profit target at the next major resistance level."
-        }
-    else:
-        analysis = generate_analysis(mock_signal)
-
+    analysis = generate_analysis(mock_signal)
     print(json.dumps(analysis, indent=4))
