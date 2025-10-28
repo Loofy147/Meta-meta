@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'services'
+    static_configs:
+      - targets: ['dashboard:8000'] # Add other services as they expose metrics

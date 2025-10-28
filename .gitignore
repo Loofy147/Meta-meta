@@ -1,0 +1,18 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+
+# DB files
+*.sqlite3
+
+# Build artifacts
+/build/
+/dist/
+/target/
+*.egg-info/
+wheels/
