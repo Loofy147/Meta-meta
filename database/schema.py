@@ -1,114 +1,189 @@
+"""
+Database Schema Definition and Initialization
+
+This script defines the complete database schema for the trading system, including
+tables for market data, portfolio management, performance tracking, and system
+configuration. It uses TimescaleDB for time-series data to ensure high-performance
+queries.
+
+Running this script is idempotent: it can be run multiple times without causing
+errors, as it uses 'CREATE TABLE IF NOT EXISTS' and 'ON CONFLICT' clauses. It also
+seeds the database with initial default data, such as a default portfolio and
+system configuration.
+"""
+
 import psycopg2
 import os
 from dotenv import load_dotenv
 import json
+from psycopg2.extensions import connection
 
 load_dotenv()
 
-def create_schema():
-    """Establishes a database connection and creates/updates the necessary tables and hypertables."""
-    conn = None
+def get_db_connection() -> connection:
+    """
+    Establishes and returns a connection to the PostgreSQL database.
+
+    Returns:
+        psycopg2.extensions.connection: A database connection object.
+    """
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST", "localhost"),
+        database=os.getenv("DB_NAME", "postgres"),
+        user=os.getenv("DB_USER", "postgres"),
+        password=os.getenv("DB_PASSWORD", "password")
+    )
+
+def create_schema() -> None:
+    """
+    Connects to the database and creates/updates all necessary tables.
+
+    This function is the main entry point for schema management. It defines and
+    creates tables for time-series data (trades, candles, features), application
+    state (portfolios, positions), and system metadata.
+    """
+    conn = get_db_connection()
     try:
-        conn = psycopg2.connect(
-            host=os.getenv("DB_HOST", "localhost"),
-            database=os.getenv("DB_NAME", "postgres"),
-            user=os.getenv("DB_USER", "postgres"),
-            password=os.getenv("DB_PASSWORD", "password")
-        )
-        cursor = conn.cursor()
+        with conn.cursor() as cursor:
+            print("Creating schema and tables...")
 
-        # --- Data Tables ---
-        cursor.execute("CREATE TABLE IF NOT EXISTS trades (time TIMESTAMPTZ NOT NULL, symbol TEXT NOT NULL, price DOUBLE PRECISION, amount DOUBLE PRECISION, side TEXT);")
-        cursor.execute("SELECT create_hypertable('trades', 'time', if_not_exists => TRUE);")
+            # --- Time-Series Data Tables (Hypertables) ---
+            print("Creating time-series data tables...")
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;")
 
-        timeframes = ['1m', '5m', '15m', '1h']
-        for tf in timeframes:
-            cursor.execute(f"""
-                CREATE TABLE IF NOT EXISTS candles_{tf} (
-                    time TIMESTAMPTZ NOT NULL, symbol TEXT NOT NULL, open DOUBLE PRECISION, high DOUBLE PRECISION,
-                    low DOUBLE PRECISION, close DOUBLE PRECISION, volume DOUBLE PRECISION,
-                    CONSTRAINT unique_candle_{tf} UNIQUE (time, symbol)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS raw_trades (
+                    time TIMESTAMPTZ NOT NULL,
+                    symbol TEXT NOT NULL,
+                    price DOUBLE PRECISION NOT NULL,
+                    amount DOUBLE PRECISION NOT NULL,
+                    side TEXT
                 );
             """)
-            cursor.execute(f"SELECT create_hypertable('candles_{tf}', 'time', if_not_exists => TRUE);")
-            cursor.execute(f"""
-                CREATE TABLE IF NOT EXISTS features_{tf} (
-                    time TIMESTAMPTZ NOT NULL, symbol TEXT NOT NULL, rsi DOUBLE PRECISION, macd DOUBLE PRECISION,
-                    macds DOUBLE PRECISION, macdh DOUBLE PRECISION, bb_lower DOUBLE PRECISION,
-                    bb_mid DOUBLE PRECISION, bb_upper DOUBLE PRECISION,
-                    CONSTRAINT unique_feature_{tf} UNIQUE (time, symbol)
+            cursor.execute("SELECT create_hypertable('raw_trades', 'time', if_not_exists => TRUE);")
+
+            timeframes = ['1m', '5m', '15m', '1h']
+            for tf in timeframes:
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS candles_{tf} (
+                        time TIMESTAMPTZ NOT NULL,
+                        symbol TEXT NOT NULL,
+                        open DOUBLE PRECISION NOT NULL,
+                        high DOUBLE PRECISION NOT NULL,
+                        low DOUBLE PRECISION NOT NULL,
+                        close DOUBLE PRECISION NOT NULL,
+                        volume DOUBLE PRECISION NOT NULL,
+                        CONSTRAINT unique_candle_{tf} UNIQUE (time, symbol)
+                    );
+                """)
+                cursor.execute(f"SELECT create_hypertable('candles_{tf}', 'time', if_not_exists => TRUE);")
+
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS features_{tf} (
+                        time TIMESTAMPTZ NOT NULL,
+                        symbol TEXT NOT NULL,
+                        rsi DOUBLE PRECISION,
+                        macd DOUBLE PRECISION,
+                        macds DOUBLE PRECISION,
+                        macdh DOUBLE PRECISION,
+                        bb_lower DOUBLE PRECISION,
+                        bb_mid DOUBLE PRECISION,
+                        bb_upper DOUBLE PRECISION,
+                        CONSTRAINT unique_feature_{tf} UNIQUE (time, symbol)
+                    );
+                """)
+                cursor.execute(f"SELECT create_hypertable('features_{tf}', 'time', if_not_exists => TRUE);")
+
+            # --- Application State and Metadata Tables ---
+            print("Creating application state and metadata tables...")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS portfolios (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT UNIQUE NOT NULL,
+                    cash_balance DOUBLE PRECISION NOT NULL
                 );
             """)
-            cursor.execute(f"SELECT create_hypertable('features_{tf}', 'time', if_not_exists => TRUE);")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS positions (
+                    id SERIAL PRIMARY KEY,
+                    portfolio_id INTEGER NOT NULL REFERENCES portfolios(id),
+                    symbol TEXT NOT NULL,
+                    quantity DOUBLE PRECISION NOT NULL,
+                    average_entry_price DOUBLE PRECISION NOT NULL,
+                    UNIQUE (portfolio_id, symbol)
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS strategy_performance (
+                    strategy_name TEXT PRIMARY KEY,
+                    hit_rate DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    total_pnl DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    trade_count INTEGER NOT NULL DEFAULT 0,
+                    total_hits INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS signals (
+                    id UUID PRIMARY KEY,
+                    asset TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL,
+                    meta JSONB,
+                    timestamp TIMESTAMPTZ NOT NULL
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS open_trades (
+                    trade_id UUID PRIMARY KEY,
+                    signal_id UUID NOT NULL REFERENCES signals(id),
+                    asset TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry_price DOUBLE PRECISION NOT NULL,
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    contributing_strategies JSONB
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS system_parameters (
+                    key TEXT PRIMARY KEY,
+                    value JSONB NOT NULL
+                );
+            """)
 
-        # --- Portfolio, Performance, and Signal Tables ---
-        cursor.execute("CREATE TABLE IF NOT EXISTS portfolios (id SERIAL PRIMARY KEY, name TEXT UNIQUE NOT NULL, cash_balance DOUBLE PRECISION NOT NULL);")
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS positions (
-                id SERIAL PRIMARY KEY, portfolio_id INTEGER REFERENCES portfolios(id), symbol TEXT NOT NULL,
-                quantity DOUBLE PRECISION NOT NULL, average_entry_price DOUBLE PRECISION NOT NULL,
-                UNIQUE (portfolio_id, symbol)
-            );
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS executed_trades (
-                id SERIAL PRIMARY KEY, portfolio_id INTEGER REFERENCES portfolios(id), symbol TEXT NOT NULL,
-                quantity DOUBLE PRECISION NOT NULL, price DOUBLE PRECISION NOT NULL, side TEXT NOT NULL,
-                timestamp TIMESTAMPTZ NOT NULL
-            );
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS strategy_performance (
-                strategy_name TEXT PRIMARY KEY,
-                hit_rate DOUBLE PRECISION NOT NULL,
-                total_pnl DOUBLE PRECISION NOT NULL,
-                trade_count INTEGER NOT NULL,
-                total_hits INTEGER NOT NULL DEFAULT 0
-            );
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS signals (
-                id UUID PRIMARY KEY,
-                asset TEXT NOT NULL,
-                direction TEXT NOT NULL,
-                confidence DOUBLE PRECISION NOT NULL,
-                meta JSONB,
-                timestamp TIMESTAMPTZ NOT NULL
-            );
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS open_trades (
-                trade_id UUID PRIMARY KEY,
-                signal_id UUID REFERENCES signals(id),
-                asset TEXT NOT NULL,
-                direction TEXT NOT NULL,
-                entry_price DOUBLE PRECISION NOT NULL,
-                timestamp TIMESTAMPTZ NOT NULL,
-                contributing_strategies JSONB
-            );
-        """)
-        cursor.execute("CREATE TABLE IF NOT EXISTS system_parameters (key TEXT PRIMARY KEY, value JSONB NOT NULL);")
+            # --- Seeding Initial Data ---
+            print("Seeding initial data...")
+            default_config = {
+                "ingestion": {
+                    "symbols": ["BTC/USDT", "ETH/USDT"]
+                },
+                "strategies": {
+                    "rsi": {"enabled": True, "overbought_threshold": 70, "oversold_threshold": 30},
+                    "macd": {"enabled": True},
+                    "sentiment": {"enabled": False},
+                    "ml": {"enabled": False}
+                },
+                "risk_management": {
+                    "max_position_size_pct": 0.1,
+                    "max_portfolio_exposure_pct": 0.5
+                }
+            }
+            cursor.execute(
+                "INSERT INTO system_parameters (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING;",
+                ('config', json.dumps(default_config))
+            )
+            cursor.execute(
+                "INSERT INTO portfolios (name, cash_balance) VALUES ('default', 100000) ON CONFLICT (name) DO NOTHING;"
+            )
 
-        conn.commit()
+            conn.commit()
+            print("Schema created/updated and seeded successfully.")
 
-        # --- Seeding ---
-        default_config = {
-            "strategies": {
-                "rsi": {"enabled": True, "overbought_threshold": 70, "oversold_threshold": 30},
-                "macd": {"enabled": True}, "sentiment": {"enabled": False}, "ml": {"enabled": False}
-            },
-            "risk_management": {"max_position_size_pct": 0.1, "max_portfolio_exposure_pct": 0.5}
-        }
-        cursor.execute("INSERT INTO system_parameters (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING;", ('config', json.dumps(default_config)))
-        cursor.execute("INSERT INTO portfolios (name, cash_balance) VALUES ('default', 100000) ON CONFLICT (name) DO NOTHING;")
-        conn.commit()
-
-        cursor.close()
-        print("Schema created/updated successfully.")
     except Exception as e:
         print(f"An error occurred during schema creation: {e}")
+        if conn:
+            conn.rollback()
     finally:
-        if conn is not None:
+        if conn:
             conn.close()
 
 if __name__ == "__main__":
