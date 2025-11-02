@@ -62,7 +62,8 @@ def create_schema():
                 strategy_name TEXT PRIMARY KEY,
                 hit_rate DOUBLE PRECISION NOT NULL,
                 total_pnl DOUBLE PRECISION NOT NULL,
-                trade_count INTEGER NOT NULL
+                trade_count INTEGER NOT NULL,
+                total_hits INTEGER NOT NULL DEFAULT 0
             );
         """)
         cursor.execute("""
@@ -73,6 +74,17 @@ def create_schema():
                 confidence DOUBLE PRECISION NOT NULL,
                 meta JSONB,
                 timestamp TIMESTAMPTZ NOT NULL
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS open_trades (
+                trade_id UUID PRIMARY KEY,
+                signal_id UUID REFERENCES signals(id),
+                asset TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_price DOUBLE PRECISION NOT NULL,
+                timestamp TIMESTAMPTZ NOT NULL,
+                contributing_strategies JSONB
             );
         """)
         cursor.execute("CREATE TABLE IF NOT EXISTS system_parameters (key TEXT PRIMARY KEY, value JSONB NOT NULL);")
