@@ -124,8 +124,11 @@ def execute_trade(portfolio_name: str, symbol: str, side: str, quantity: float, 
 
             # --- Pre-Execution Risk Validation ---
             risk_validator = RiskValidator(conn)
-            if not risk_validator.is_trade_safe(portfolio_name, symbol, quantity, trade_value):
+            portfolio_status = get_portfolio_status(portfolio_name)
+            risk_assessment = risk_validator.enhanced_risk_check(portfolio_status, symbol, quantity, trade_value)
+            if not risk_assessment['approved']:
                 print(f"Trade for {symbol} failed risk validation. Aborting.")
+                print(f"Risk Assessment: {risk_assessment}")
                 return
 
             # Get portfolio ID and current state

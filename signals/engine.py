@@ -18,7 +18,7 @@ from typing import List, Dict, Any
 # Add the parent directory to the path to allow imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.manager import get_config
-from signals.strategies import rsi, macd, sentiment, ml_strategy
+from signals.strategies import rsi, macd, sentiment, ml_strategy, orderbook
 
 def generate_signals(symbol: str = 'BTC/USDT') -> List[Dict[str, Any]]:
     """
@@ -37,11 +37,13 @@ def generate_signals(symbol: str = 'BTC/USDT') -> List[Dict[str, Any]]:
                               and the symbol.
     """
     # A registry of all available strategy modules and their signal functions
+    orderbook_strategy = orderbook.OrderBookStrategy()
     strategies = {
         'rsi': rsi.generate_signal,
         'macd': macd.generate_signal,
         'sentiment': sentiment.generate_signal,
         'ml': ml_strategy.generate_signal,
+        'orderbook': orderbook_strategy.generate_signal,
     }
 
     signals: List[Dict[str, Any]] = []
@@ -51,12 +53,12 @@ def generate_signals(symbol: str = 'BTC/USDT') -> List[Dict[str, Any]]:
         strategy_config = get_config().get('strategies', {})
     except ValueError:
         print("Warning: Configuration not found. Running with default strategy settings.")
-        strategy_config = {'rsi': {'enabled': True}, 'macd': {'enabled': True}}
+        strategy_config = {'rsi': {'enabled': True}, 'macd': {'enabled': True}, 'orderbook': {'enabled': True}}
 
 
     for name, generate_func in strategies.items():
         # Execute only the strategies that are enabled in the config
-        if strategy_config.get(name, {}).get('enabled', False):
+        if strategy_config.get(name, {}).get('enabled', True):
             try:
                 direction, confidence = generate_func(symbol)
                 # Only include signals that have a clear directional bias
