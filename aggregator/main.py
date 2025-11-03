@@ -130,10 +130,10 @@ def _create_final_signal(symbol: str, direction: str, confidence: float, contrib
     return {
         "signal_id": str(uuid.uuid4()),
         "asset": symbol,
-        "direction": final_direction,
-        "confidence": round(final_confidence, 4),
+        "direction": direction,
+        "confidence": round(confidence, 4),
         "origin": "adaptive_aggregator",
-        "meta": {"contributing_signals": signals},
+        "meta": {"contributing_signals": contributing},
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 

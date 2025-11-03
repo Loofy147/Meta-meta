@@ -47,7 +47,7 @@ def get_redis_client() -> redis.Redis:
     """
     return redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
 
-def run_backtest(symbol: str, start_date: str, end_date: str) -> None:
+def run_backtest(symbol: str, start_date: str, end_date: str, db_conn: Optional[connection] = None) -> None:
     """Runs an event-driven backtest by replaying historical data.
 
     This function serves as the main entry point for the backtester. It queries
@@ -60,10 +60,13 @@ def run_backtest(symbol: str, start_date: str, end_date: str) -> None:
         symbol: The symbol to backtest (e.g., 'BTC/USDT').
         start_date: The start date of the backtest in 'YYYY-MM-DD' format.
         end_date: The end date of the backtest in 'YYYY-MM-DD' format.
+        db_conn: An optional existing database connection. If not provided,
+                 a new connection will be established.
     """
-    db_conn = None
+    conn_provided = db_conn is not None
     try:
-        db_conn = get_db_connection()
+        if not conn_provided:
+            db_conn = get_db_connection()
         redis_client = get_redis_client()
 
         with db_conn.cursor() as cursor:
@@ -105,7 +108,7 @@ def run_backtest(symbol: str, start_date: str, end_date: str) -> None:
     except redis.RedisError as e:
         print(f"Redis error during backtest: {e}")
     finally:
-        if db_conn:
+        if db_conn and not conn_provided:
             db_conn.close()
 
 if __name__ == '__main__':

@@ -19,7 +19,7 @@ import uuid
 from dotenv import load_dotenv
 import pandas as pd
 from datetime import datetime, timezone
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from psycopg2.extensions import connection
 
 # Add the parent directory to the path to allow imports from sibling modules
@@ -106,7 +106,7 @@ def get_portfolio_status(portfolio_name: str = 'default') -> Dict[str, Any]:
     finally:
         conn.close()
 
-def execute_trade(portfolio_name: str, symbol: str, side: str, quantity: float, signal_id: str) -> None:
+def execute_trade(portfolio_name: str, symbol: str, side: str, quantity: float, signal_id: Optional[str] = None) -> None:
     """Executes a trade and updates the portfolio state within a transaction.
 
     This is a critical, state-changing function that handles the logic for
@@ -185,8 +185,9 @@ def execute_trade(portfolio_name: str, symbol: str, side: str, quantity: float, 
                 cursor.execute("DELETE FROM positions WHERE portfolio_id = %s AND symbol = %s AND quantity = 0;", (portfolio_id, symbol))
 
             # If all DB operations succeed, publish the event for the performance tracker.
+            trade_signal_id = signal_id if signal_id is not None else str(uuid.uuid4())
             publisher.publish('executed_trades', {
-                'signal_id': signal_id, 'symbol': symbol, 'side': side,
+                'signal_id': trade_signal_id, 'symbol': symbol, 'side': side,
                 'quantity': quantity, 'price': price,
                 'timestamp': datetime.now(timezone.utc).isoformat()
             })

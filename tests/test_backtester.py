@@ -42,7 +42,7 @@ class TestEventDrivenBacktester(unittest.TestCase):
         self.conn.commit()
 
         # Clear the Redis stream before the test
-        self.redis_client.delete('ingested_trades')
+        self.redis_client.delete('raw_trades')
 
     def tearDown(self):
         """Clean up the test database and Redis."""
@@ -50,14 +50,14 @@ class TestEventDrivenBacktester(unittest.TestCase):
         self.conn.commit()
         self.cursor.close()
         self.conn.close()
-        self.redis_client.delete('ingested_trades')
+        self.redis_client.delete('raw_trades')
 
     def test_run_backtest(self):
         """Test that the backtester correctly replays data to the event bus."""
         run_backtest('BTC/USDT', '2023-01-01', '2023-01-02', db_conn=self.conn)
 
         # Verify data was published to Redis
-        stream_data = self.redis_client.xrange('ingested_trades')
+        stream_data = self.redis_client.xrange('raw_trades')
         self.assertEqual(len(stream_data), 2)
 
         first_event = stream_data[0][1]
