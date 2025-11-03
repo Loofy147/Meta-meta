@@ -1,0 +1,342 @@
+version: '3.8'
+
+services:
+  # =====================================================
+  # INFRASTRUCTURE SERVICES
+  # =====================================================
+  
+  db:
+    image: timescale/timescaledb:latest-pg14
+    container_name: trading_db
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trading_network
+
+  redis:
+    image: redis/redis-stack-server:latest
+    container_name: trading_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trading_network
+
+  # =====================================================
+  # CORE TRADING SERVICES
+  # =====================================================
+
+  app_base:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DB_HOST=db
+      - DB_NAME=${DB_NAME:-postgres}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-password}
+      - REDIS_HOST=redis
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+    networks:
+      - trading_network
+
+  ingestion:
+    extends: app_base
+    container_name: trading_ingestion
+    command: python ingestion/data_ingestor.py
+    restart: unless-stopped
+    labels:
+      - "service.type=data"
+      - "service.critical=true"
+
+  resampler:
+    extends: app_base
+    container_name: trading_resampler
+    command: python database/resampler.py
+    restart: unless-stopped
+    labels:
+      - "service.type=data"
+      - "service.critical=true"
+
+  feature_calculator:
+    extends: app_base
+    container_name: trading_features
+    command: python features/calculator.py
+    restart: unless-stopped
+    labels:
+      - "service.type=data"
+      - "service.critical=true"
+
+  aggregator:
+    extends: app_base
+    container_name: trading_aggregator
+    command: python aggregator/main.py
+    restart: unless-stopped
+    labels:
+      - "service.type=signal"
+      - "service.critical=true"
+
+  orchestrator:
+    extends: app_base
+    container_name: trading_orchestrator
+    command: python orchestrator/main.py
+    restart: unless-stopped
+    labels:
+      - "service.type=execution"
+      - "service.critical=true"
+
+  performance_tracker:
+    extends: app_base
+    container_name: trading_performance
+    command: python performance/tracker.py
+    restart: unless-stopped
+    labels:
+      - "service.type=analytics"
+
+  # =====================================================
+  # ADVANCED FEATURE SERVICES
+  # =====================================================
+
+  risk_monitor:
+    extends: app_base
+    container_name: trading_risk_monitor
+    command: python advanced/risk_monitor_service.py
+    restart: unless-stopped
+    environment:
+      - RISK_CHECK_INTERVAL=300  # 5 minutes
+      - VAR_CONFIDENCE=0.95
+      - STRESS_TEST_ENABLED=true
+    labels:
+      - "service.type=risk"
+      - "service.critical=true"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; redis.Redis(host='redis').ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  rl_optimizer:
+    extends: app_base
+    container_name: trading_rl_optimizer
+    command: python advanced/rl_optimizer_service.py
+    restart: unless-stopped
+    environment:
+      - TRAINING_MODE=false
+      - OPTIMIZATION_INTERVAL=3600  # 1 hour
+      - MODEL_SAVE_INTERVAL=10000
+    volumes:
+      - rl_models:/app/rl_models
+    labels:
+      - "service.type=optimization"
+      - "service.critical=false"
+
+  orderbook_strategy:
+    extends: app_base
+    container_name: trading_orderbook
+    command: python advanced/orderbook_service.py
+    restart: unless-stopped
+    environment:
+      - ORDERBOOK_DEPTH=10
+      - WINDOW_SIZE=50
+    labels:
+      - "service.type=signal"
+
+  arbitrage_scanner:
+    extends: app_base
+    container_name: trading_arbitrage
+    command: python advanced/arbitrage_service.py
+    restart: unless-stopped
+    environment:
+      - MIN_PROFIT_BPS=20
+      - SCAN_INTERVAL=1000  # 1 second
+    labels:
+      - "service.type=arbitrage"
+
+  # =====================================================
+  # WEB & API SERVICES
+  # =====================================================
+
+  dashboard:
+    extends: app_base
+    container_name: trading_dashboard
+    command: uvicorn dashboard.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    labels:
+      - "service.type=api"
+      - "service.critical=true"
+
+  advanced_dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: trading_advanced_dashboard
+    ports:
+      - "3001:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    depends_on:
+      - dashboard
+    restart: unless-stopped
+    labels:
+      - "service.type=ui"
+
+  # =====================================================
+  # MONITORING & OBSERVABILITY
+  # =====================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: trading_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: trading_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  loki:
+    image: grafana/loki:latest
+    container_name: trading_loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: trading_promtail
+    volumes:
+      - /var/log:/var/log
+      - ./promtail-config.yml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  # =====================================================
+  # UTILITY SERVICES
+  # =====================================================
+
+  schema_init:
+    extends: app_base
+    container_name: trading_schema_init
+    command: >
+      sh -c "
+        python database/schema.py &&
+        python advanced/advanced_schema.py
+      "
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: trading_pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@trading.com}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin}
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+  redis_insight:
+    image: redislabs/redisinsight:latest
+    container_name: trading_redis_insight
+    ports:
+      - "8001:8001"
+    volumes:
+      - redis_insight_data:/db
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - trading_network
+
+# =====================================================
+# NETWORKS
+# =====================================================
+
+networks:
+  trading_network:
+    driver: bridge
+
+# =====================================================
+# VOLUMES
+# =====================================================
+
+volumes:
+  timescaledb_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+  redis_insight_data:
+    driver: local
+  rl_models:
+    driver: local

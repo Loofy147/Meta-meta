@@ -1,0 +1,350 @@
+import React, { useState, useEffect } from 'react';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { Activity, TrendingUp, AlertTriangle, Shield, Zap, DollarSign, Target, Brain } from 'lucide-react';
+
+const MonitoringDashboard = () => {
+  const [systemStatus, setSystemStatus] = useState({
+    overall: 'healthy',
+    services: [],
+    lastUpdate: new Date()
+  });
+
+  const [riskMetrics, setRiskMetrics] = useState({
+    var95: 8500,
+    cvar: 12000,
+    varPct: 8.5,
+    drawdown: 3.2,
+    alerts: 1
+  });
+
+  const [portfolio, setPortfolio] = useState({
+    value: 125000,
+    cash: 25000,
+    pnl: 2500,
+    pnlPct: 2.04,
+    positions: 5
+  });
+
+  const [performance, setPerformance] = useState({
+    sharpe: 1.85,
+    winRate: 58.5,
+    profitFactor: 1.92,
+    totalTrades: 147
+  });
+
+  const [rlStatus, setRLStatus] = useState({
+    currentAction: 'Moderate',
+    confidence: 0.87,
+    epsilon: 0.15,
+    episodes: 1247
+  });
+
+  const [arbitrage, setArbitrage] = useState({
+    opportunities: 3,
+    avgProfit: 0.42,
+    executed: 12,
+    success: 91.7
+  });
+
+  // Mock real-time data
+  const [priceHistory, setPriceHistory] = useState([
+    { time: '10:00', price: 49800, var: 8200 },
+    { time: '10:15', price: 50100, var: 8350 },
+    { time: '10:30', price: 50050, var: 8500 },
+    { time: '10:45', price: 50200, var: 8400 },
+    { time: '11:00', price: 50300, var: 8600 },
+    { time: '11:15', price: 50150, var: 8500 }
+  ]);
+
+  const [strategies, setStrategies] = useState([
+    { name: 'RSI', weight: 0.22, hitRate: 61.2, pnl: 4200 },
+    { name: 'MACD', weight: 0.18, hitRate: 55.8, pnl: 3100 },
+    { name: 'ML', weight: 0.25, hitRate: 64.5, pnl: 5800 },
+    { name: 'Sentiment', weight: 0.15, hitRate: 52.1, pnl: 1900 },
+    { name: 'Orderbook', weight: 0.20, hitRate: 59.3, pnl: 3500 }
+  ]);
+
+  const [orderbookMetrics, setOrderbookMetrics] = useState([
+    { time: '11:10', imbalance: 0.15, vpin: 0.32, toxicity: 0.28 },
+    { time: '11:11', imbalance: 0.22, vpin: 0.38, toxicity: 0.35 },
+    { time: '11:12', imbalance: 0.18, vpin: 0.29, toxicity: 0.25 },
+    { time: '11:13', imbalance: 0.25, vpin: 0.42, toxicity: 0.38 },
+    { time: '11:14', imbalance: 0.12, vpin: 0.35, toxicity: 0.31 },
+    { time: '11:15', imbalance: 0.20, vpin: 0.40, toxicity: 0.33 }
+  ]);
+
+  // Simulate real-time updates
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = new Date();
+      const timeStr = `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
+      
+      setPriceHistory(prev => {
+        const newPrice = prev[prev.length - 1].price + (Math.random() - 0.5) * 100;
+        const newVar = 8500 + (Math.random() - 0.5) * 500;
+        return [...prev.slice(-5), { time: timeStr, price: newPrice, var: newVar }];
+      });
+
+      setOrderbookMetrics(prev => {
+        const newMetric = {
+          time: timeStr,
+          imbalance: 0.15 + (Math.random() - 0.5) * 0.2,
+          vpin: 0.35 + (Math.random() - 0.5) * 0.15,
+          toxicity: 0.30 + (Math.random() - 0.5) * 0.15
+        };
+        return [...prev.slice(-5), newMetric];
+      });
+
+      setPortfolio(prev => ({
+        ...prev,
+        value: prev.value + (Math.random() - 0.5) * 500,
+        pnl: prev.pnl + (Math.random() - 0.5) * 50
+      }));
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+
+  const MetricCard = ({ title, value, subtitle, icon: Icon, color, trend }) => (
+    <div className="bg-white rounded-lg shadow p-6 border-l-4" style={{ borderLeftColor: color }}>
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-gray-500 text-sm font-medium">{title}</p>
+          <p className="text-3xl font-bold mt-2" style={{ color }}>{value}</p>
+          {subtitle && <p className="text-sm text-gray-600 mt-1">{subtitle}</p>}
+        </div>
+        <Icon className="w-12 h-12 opacity-20" style={{ color }} />
+      </div>
+      {trend && (
+        <div className={`mt-2 text-sm font-semibold ${trend > 0 ? 'text-green-600' : 'text-red-600'}`}>
+          {trend > 0 ? '↑' : '↓'} {Math.abs(trend).toFixed(2)}%
+        </div>
+      )}
+    </div>
+  );
+
+  const StatusBadge = ({ status }) => {
+    const colors = {
+      healthy: 'bg-green-100 text-green-800',
+      warning: 'bg-yellow-100 text-yellow-800',
+      critical: 'bg-red-100 text-red-800'
+    };
+    return (
+      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${colors[status] || colors.warning}`}>
+        {status.toUpperCase()}
+      </span>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-6">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-4xl font-bold text-gray-900 mb-2">Advanced Trading System</h1>
+        <div className="flex items-center gap-4">
+          <p className="text-gray-600">Real-time Monitoring Dashboard</p>
+          <StatusBadge status="healthy" />
+          <span className="text-sm text-gray-500">
+            Last update: {new Date().toLocaleTimeString()}
+          </span>
+        </div>
+      </div>
+
+      {/* Key Metrics Row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <MetricCard
+          title="Portfolio Value"
+          value={`$${portfolio.value.toLocaleString()}`}
+          subtitle={`P&L: $${portfolio.pnl.toFixed(0)} (${portfolio.pnlPct.toFixed(2)}%)`}
+          icon={DollarSign}
+          color="#3b82f6"
+          trend={portfolio.pnlPct}
+        />
+        <MetricCard
+          title="Risk (VaR 95%)"
+          value={`$${riskMetrics.var95.toLocaleString()}`}
+          subtitle={`${riskMetrics.varPct.toFixed(1)}% of portfolio`}
+          icon={Shield}
+          color="#ef4444"
+        />
+        <MetricCard
+          title="Sharpe Ratio"
+          value={performance.sharpe.toFixed(2)}
+          subtitle={`Win Rate: ${performance.winRate.toFixed(1)}%`}
+          icon={TrendingUp}
+          color="#10b981"
+        />
+        <MetricCard
+          title="RL Optimizer"
+          value={rlStatus.currentAction}
+          subtitle={`Confidence: ${(rlStatus.confidence * 100).toFixed(0)}%`}
+          icon={Brain}
+          color="#8b5cf6"
+        />
+      </div>
+
+      {/* Charts Row 1 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Price & VaR Chart */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Activity className="w-5 h-5" />
+            Price & VaR Evolution
+          </h2>
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={priceHistory}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="time" />
+              <YAxis yAxisId="left" />
+              <YAxis yAxisId="right" orientation="right" />
+              <Tooltip />
+              <Legend />
+              <Line yAxisId="left" type="monotone" dataKey="price" stroke="#3b82f6" name="Price" strokeWidth={2} />
+              <Line yAxisId="right" type="monotone" dataKey="var" stroke="#ef4444" name="VaR" strokeWidth={2} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Strategy Performance */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Target className="w-5 h-5" />
+            Strategy Performance
+          </h2>
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={strategies}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="hitRate" fill="#10b981" name="Hit Rate (%)" />
+              <Bar dataKey="weight" fill="#3b82f6" name="Weight (×100)" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Charts Row 2 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Order Book Metrics */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Zap className="w-5 h-5" />
+            Order Book Analytics
+          </h2>
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={orderbookMetrics}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="time" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Line type="monotone" dataKey="imbalance" stroke="#3b82f6" name="Imbalance" strokeWidth={2} />
+              <Line type="monotone" dataKey="vpin" stroke="#f59e0b" name="VPIN" strokeWidth={2} />
+              <Line type="monotone" dataKey="toxicity" stroke="#ef4444" name="Toxicity" strokeWidth={2} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Strategy Allocation */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-bold mb-4">Strategy Allocation</h2>
+          <ResponsiveContainer width="100%" height={250}>
+            <PieChart>
+              <Pie
+                data={strategies}
+                dataKey="weight"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                outerRadius={80}
+                label={({ name, weight }) => `${name}: ${(weight * 100).toFixed(0)}%`}
+              >
+                {strategies.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Status Tables */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Risk Alerts */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-yellow-500" />
+            Risk Alerts
+          </h2>
+          <div className="space-y-3">
+            {riskMetrics.alerts > 0 ? (
+              <div className="p-3 bg-yellow-50 border-l-4 border-yellow-400 rounded">
+                <p className="font-semibold text-yellow-800">Position Concentration</p>
+                <p className="text-sm text-yellow-700">BTC position at 28% of portfolio</p>
+                <p className="text-xs text-yellow-600 mt-1">2 minutes ago</p>
+              </div>
+            ) : (
+              <p className="text-gray-500 text-center py-4">No active alerts</p>
+            )}
+          </div>
+        </div>
+
+        {/* Arbitrage Opportunities */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Zap className="w-5 h-5 text-purple-500" />
+            Arbitrage
+          </h2>
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Active Opportunities</span>
+              <span className="font-bold text-2xl text-purple-600">{arbitrage.opportunities}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Avg Profit</span>
+              <span className="font-semibold text-green-600">{arbitrage.avgProfit}%</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Success Rate</span>
+              <span className="font-semibold">{arbitrage.success}%</span>
+            </div>
+          </div>
+        </div>
+
+        {/* RL Status */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Brain className="w-5 h-5 text-indigo-500" />
+            RL Optimizer
+          </h2>
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Current Mode</span>
+              <span className="font-bold text-indigo-600">{rlStatus.currentAction}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Exploration (ε)</span>
+              <span className="font-semibold">{(rlStatus.epsilon * 100).toFixed(0)}%</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Episodes</span>
+              <span className="font-semibold">{rlStatus.episodes.toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="mt-8 text-center text-gray-500 text-sm">
+        <p>Advanced Trading System v2.0 | All systems operational</p>
+      </div>
+    </div>
+  );
+};
+
+export default MonitoringDashboard;
