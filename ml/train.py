@@ -1,10 +1,18 @@
-"""
-Machine Learning Model Training
+"""Handles the training of the predictive machine learning model.
 
-This module is responsible for training the predictive model used by the ML-based
-trading strategy. It loads a pre-labeled dataset, splits it into training and
-testing sets, trains a LightGBM classifier, evaluates its performance, and saves
-the trained model artifact for later use in signal generation.
+This module provides a complete pipeline for training the LightGBM classifier
+that powers the ML-based trading strategy. The process includes:
+1.  **Data Loading**: It loads a pre-labeled dataset, which is expected to
+    contain various technical indicator features and a target 'label' column.
+2.  **Data Splitting**: The data is split into training and testing sets to
+    allow for an unbiased evaluation of the model's performance.
+3.  **Model Training**: A LightGBM (LGBM) classifier is initialized and trained
+    on the training data.
+4.  **Performance Evaluation**: The trained model is evaluated on the unseen
+    test set, and a classification report is printed.
+5.  **Model Serialization**: The final trained model object is serialized and
+    saved to a file, making it available for the `ml_strategy` module to use
+    for live signal generation.
 """
 
 import pandas as pd
@@ -14,61 +22,71 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 from typing import Dict, Any
 
-# Define the path for the final model artifact
+# Define the standard file path for the final model artifact.
 MODEL_PATH = "ml/model.pkl"
 DEFAULT_DATA_PATH = 'ml/labeled_data.csv'
 
 def train_model(data_path: str = DEFAULT_DATA_PATH) -> Dict[str, Any]:
-    """
-    Trains a LightGBM model on labeled feature data and saves it.
+    """Trains a LightGBM classifier on labeled feature data and saves it.
 
-    This function performs the following steps:
-    1. Loads a CSV file containing features and a target 'label' column.
-    2. Splits the data into training and testing sets.
-    3. Initializes and trains a LightGBM multiclass classifier.
-    4. Evaluates the model's performance on the test set.
-    5. Saves the trained model to a file using joblib.
+    This function encapsulates the end-to-end model training workflow. It is
+    designed to be run as a standalone script to prepare the model artifact
+    required by the real-time ML strategy.
+
+    The input data is expected to be a CSV file where each row is a timestamped
+    set of features, and a 'label' column indicates the target outcome, which
+    should be one of {1: 'buy', -1: 'sell', 0: 'hold'}.
 
     Args:
-        data_path (str): The path to the labeled CSV data file.
+        data_path: The file path to the labeled CSV dataset.
 
     Returns:
-        Dict[str, Any]: A dictionary containing the trained model object
-                        and the classification report from the evaluation.
+        A dictionary containing the trained model object and a string
+        representation of the classification report from the evaluation.
     """
-    print(f"Loading data from '{data_path}'...")
+    print(f"Loading labeled dataset from '{data_path}'...")
     df = pd.read_csv(data_path, index_col='time', parse_dates=True)
 
-    # The 'label' column is our target variable: 1 (buy), -1 (sell), 0 (hold)
+    # The 'label' column is the target variable (y). All other relevant
+    # columns are the features (X).
     X = df.drop(columns=['label', 'symbol'])
     y = df['label']
 
-    # Stratified split to maintain label distribution in train/test sets
+    # Use a stratified split to ensure the distribution of labels (buy/sell/hold)
+    # is the same in both the training and testing sets.
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     print(f"Data split into {len(X_train)} training samples and {len(X_test)} testing samples.")
 
-    # Initialize and train the LightGBM model
-    print("Training LightGBM model...")
+    # Initialize and train the LightGBM model. The parameters can be tuned
+    # for better performance.
+    print("Training LightGBM classifier...")
     model = lgb.LGBMClassifier(
         objective='multiclass',
-        num_class=3, # Corresponds to buy (1), sell (-1), hold (0)
-        random_state=42
+        num_class=3,  # Corresponds to the three labels: -1, 0, 1
+        random_state=42,
+        n_estimators=100,
+        learning_rate=0.1
     )
     model.fit(X_train, y_train)
 
-    # Evaluate the model's performance
-    print("\nEvaluating model performance on the test set...")
+    # Evaluate the model's performance on the held-out test set.
+    print("\n--- Model Performance Evaluation ---")
     y_pred = model.predict(X_test)
-    report = classification_report(y_test, y_pred, target_names=['sell (-1)', 'hold (0)', 'buy (1)'])
-    print("Model Evaluation Report:")
+    report = classification_report(
+        y_test,
+        y_pred,
+        target_names=['sell (-1)', 'hold (0)', 'buy (1)'],
+        zero_division=0
+    )
+    print("Classification Report on Test Set:")
     print(report)
 
-    # Save the trained model artifact
-    print(f"Saving trained model to '{MODEL_PATH}'...")
+    # Save the trained model to a file for use in the live signal generation.
+    print(f"Saving trained model artifact to '{MODEL_PATH}'...")
     joblib.dump(model, MODEL_PATH)
-    print("Model training complete and artifact saved.")
+    print("Model training complete. Artifact is ready for use.")
 
     return {"model": model, "classification_report": report}
 

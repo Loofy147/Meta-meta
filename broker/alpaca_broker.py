@@ -1,9 +1,12 @@
-"""
-Alpaca Broker Integration
+"""Provides a client for interacting with the Alpaca trading API.
 
-This module provides a client for interacting with the Alpaca trading API. It
-encapsulates the logic for submitting orders, checking their status, and listing
-current positions, supporting both live and paper trading environments.
+This module encapsulates the logic for connecting to the Alpaca API, submitting
+trade orders, and querying account information like order status and current
+positions. It is designed to work with both live and paper trading environments,
+configurable via environment variables.
+
+This class serves as the direct interface to the external broker, abstracting away
+the specifics of the `alpaca-trade-api` library from the rest of the application.
 """
 
 import alpaca_trade_api as tradeapi
@@ -15,69 +18,82 @@ from alpaca_trade_api.entity import Order, Position
 load_dotenv()
 
 class AlpacaBroker:
-    """
-    A broker class for submitting trades and managing positions via the Alpaca API.
+    """A broker client for placing trades and managing positions via Alpaca.
 
-    This class handles the authentication and provides simplified methods for common
-    trading operations. It requires ALPACA_API_KEY and ALPACA_SECRET_KEY to be
-    set in the environment.
+    This class handles API authentication and provides simplified, robust methods
+    for common trading operations. It requires `ALPACA_API_KEY` and
+    `ALPACA_SECRET_KEY` to be set in the environment.
+
+    Attributes:
+        api: An instance of the `alpaca_trade_api.REST` client.
     """
     def __init__(self):
-        """
-        Initializes the broker and establishes a connection to the Alpaca API.
+        """Initializes the broker and connects to the Alpaca API.
 
-        The API keys are read from environment variables. The connection defaults to
-        the paper trading endpoint unless overridden by the ALPACA_BASE_URL env var.
+        The API keys are read from environment variables. The connection defaults
+        to the paper trading endpoint but can be overridden by setting the
+        `ALPACA_BASE_URL` environment variable to the live trading URL.
+
+        Raises:
+            ConnectionError: If the API keys are missing or invalid, or if the
+                connection to the Alpaca API fails.
         """
+        api_key = os.getenv("ALPACA_API_KEY")
+        secret_key = os.getenv("ALPACA_SECRET_KEY")
+        if not api_key or not secret_key:
+            raise ConnectionError("Alpaca API key/secret not found in environment variables.")
+
         try:
             self.api = tradeapi.REST(
-                key_id=os.getenv("ALPACA_API_KEY"),
-                secret_key=os.getenv("ALPACA_SECRET_KEY"),
+                key_id=api_key,
+                secret_key=secret_key,
                 base_url=os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
             )
-            self.api.get_account() # Verify connection and credentials
+            self.api.get_account()  # Verify connection and credentials
+            print("Successfully connected to Alpaca API.")
         except Exception as e:
             raise ConnectionError(f"Failed to connect to Alpaca API: {e}")
 
     def submit_order(self, symbol: str, qty: float, side: str, order_type: str = 'market', time_in_force: str = 'gtc') -> Optional[Order]:
-        """
-        Submits a trade order to the broker.
+        """Submits a trade order to the broker.
 
         Args:
-            symbol (str): The symbol for the asset to trade (e.g., 'BTC/USD').
-            qty (float): The quantity of the asset to trade.
-            side (str): The order side, either 'buy' or 'sell'.
-            order_type (str): The type of order ('market', 'limit', etc.).
-            time_in_force (str): The time-in-force for the order ('gtc', 'day', etc.).
+            symbol: The symbol for the asset to trade (e.g., 'BTC/USD').
+            qty: The quantity of the asset to trade. For crypto, this is the
+                base currency amount.
+            side: The order side, either 'buy' or 'sell'.
+            order_type: The type of order, such as 'market' or 'limit'.
+            time_in_force: The time-in-force for the order, e.g., 'gtc' (good
+                'til canceled) or 'day'.
 
         Returns:
-            Optional[Order]: An Alpaca Order entity if the order was submitted
-                             successfully, otherwise None.
+            An Alpaca `Order` entity if the order was submitted successfully,
+            otherwise None.
         """
         try:
+            # Note: Alpaca API expects crypto symbols with a '/', not concatenated.
             order = self.api.submit_order(
                 symbol=symbol,
-                qty=qty,
+                qty=str(qty), # API expects quantity as a string
                 side=side,
                 type=order_type,
                 time_in_force=time_in_force
             )
-            print(f"Submitted {side} order for {qty} {symbol}.")
+            print(f"Successfully submitted {side} order for {qty} {symbol}.")
             return order
         except Exception as e:
-            print(f"An error occurred while submitting the order for {symbol}: {e}")
+            print(f"An error occurred while submitting order for {symbol}: {e}")
             return None
 
     def get_order_status(self, order_id: str) -> Optional[Order]:
-        """
-        Retrieves the status of a specific order by its ID.
+        """Retrieves the status of a specific order by its ID.
 
         Args:
-            order_id (str): The unique ID of the order to check.
+            order_id: The unique ID of the order to check.
 
         Returns:
-            Optional[Order]: An Alpaca Order entity containing the latest status,
-                             or None if the order is not found.
+            An Alpaca `Order` entity containing the latest status, or None if
+            the order is not found or an error occurs.
         """
         try:
             order = self.api.get_order(order_id)
@@ -87,12 +103,11 @@ class AlpacaBroker:
             return None
 
     def list_positions(self) -> List[Position]:
-        """
-        Retrieves a list of all open positions in the account.
+        """Retrieves a list of all open positions in the Alpaca account.
 
         Returns:
-            List[Position]: A list of Alpaca Position entities. Returns an empty
-                            list if there are no positions or an error occurs.
+            A list of Alpaca `Position` entities. Returns an empty list if
+            there are no positions or if an error occurs.
         """
         try:
             positions = self.api.list_positions()

@@ -1,16 +1,19 @@
-"""
-Trade Orchestrator
+"""The central trade orchestrator for the autonomous trading loop.
 
-This is the central nervous system of the autonomous trading loop. The orchestrator
-listens for high-level, aggregated signals from the event bus. For each signal
-that meets the confidence threshold, it manages the entire trade lifecycle:
+This module acts as the central nervous system of the trading system. It is an
+event-driven service that listens for high-confidence, aggregated signals from
+the `aggregated_signals` Redis Stream.
 
-1.  **Signal Persistence:** Stores the signal in the database for auditing and
-    performance tracking.
-2.  **Risk Management:** Validates the potential trade against a set of predefined
-    risk rules (e.g., max position size, portfolio exposure).
-3.  **Execution:** If the trade is deemed safe, it instructs the portfolio
-    manager to execute the trade via the connected broker.
+For each incoming signal, the orchestrator manages the complete trade lifecycle:
+1.  **Confidence Check**: It first verifies if the signal's confidence score
+    meets a configurable threshold, discarding low-confidence signals.
+2.  **Signal Persistence**: The valid signal is stored in the `signals` database
+    table for auditing, analysis, and performance tracking.
+3.  **Pre-Execution Risk Management**: It invokes the `RiskValidator` to ensure
+    the potential trade complies with all predefined risk rules (e.g., maximum
+    position size, portfolio exposure limits).
+4.  **Trade Execution**: If the risk checks pass, it calls the `PortfolioManager`
+    to execute the trade through the designated broker API.
 """
 
 import redis
@@ -22,25 +25,28 @@ from dotenv import load_dotenv
 from typing import Dict, Any
 from psycopg2.extensions import connection
 
-# Add the parent directory to the path to allow imports
+# Add the parent directory to the path to allow imports from sibling modules
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from portfolio.manager import execute_trade
 from risk.validator import RiskValidator
-# The broker is not directly used here but is called by the portfolio manager.
+# The broker module is not directly used here; it is abstracted away by the
+# portfolio manager, which is the sole execution gateway.
 
 load_dotenv()
 
-# --- Configuration ---
-CONFIDENCE_THRESHOLD = 0.55 # Minimum confidence to consider a signal for execution
-TRADE_QUANTITY = 0.01 # Simplified fixed quantity for this example
+# --- Orchestrator Configuration ---
+# Minimum confidence score required to consider a signal for execution.
+CONFIDENCE_THRESHOLD = 0.55
+# For simplicity, this example uses a fixed trade size. A real system would
+# calculate this dynamically based on risk, volatility, etc.
+TRADE_QUANTITY = 0.01
 
 def get_redis_client() -> redis.Redis:
-    """
-    Establishes and returns a connection to the Redis server.
+    """Establishes and returns a connection to the Redis server.
 
     Returns:
-        redis.Redis: An active Redis client instance.
+        An active Redis client instance.
     """
     return redis.Redis(
         host=os.getenv("REDIS_HOST", "localhost"),
@@ -49,11 +55,12 @@ def get_redis_client() -> redis.Redis:
     )
 
 def get_db_connection() -> connection:
-    """
-    Establishes and returns a connection to the PostgreSQL database.
+    """Establishes and returns a connection to the PostgreSQL database.
+
+    Uses credentials from environment variables (DB_HOST, DB_NAME, etc.).
 
     Returns:
-        psycopg2.extensions.connection: A database connection object.
+        A psycopg2 database connection object.
     """
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
@@ -63,12 +70,11 @@ def get_db_connection() -> connection:
     )
 
 def persist_signal(signal: Dict[str, Any], conn: connection) -> None:
-    """
-    Stores a received signal in the database for auditing and analysis.
+    """Stores a received signal in the database for auditing and analysis.
 
     Args:
-        signal (Dict[str, Any]): The aggregated signal data.
-        conn (psycopg2.extensions.connection): An active database connection.
+        signal: The aggregated signal data received from the event bus.
+        conn: An active psycopg2 database connection object.
     """
     with conn.cursor() as cursor:
         cursor.execute("""
@@ -79,17 +85,20 @@ def persist_signal(signal: Dict[str, Any], conn: connection) -> None:
             signal['asset'],
             signal['direction'],
             signal['confidence'],
-            json.dumps(signal['meta']),
+            json.dumps(signal['meta']),  # Persist contributing signals as JSON
             signal['timestamp']
         ))
     conn.commit()
 
 def process_signal(signal: Dict[str, Any]) -> None:
-    """
-    Processes a single aggregated signal, handling the full trade lifecycle.
+    """Processes a single aggregated signal through the full trade lifecycle.
+
+    This function is the core logic of the orchestrator. It applies the
+    confidence filter, persists the signal, runs risk checks, and triggers
+    trade execution if all conditions are met.
 
     Args:
-        signal (Dict[str, Any]): The aggregated signal to process.
+        signal: A dictionary representing the aggregated signal to process.
     """
     print(f"Orchestrator received signal: {signal['asset']} -> {signal['direction']} (Confidence: {signal['confidence']})")
 
@@ -98,7 +107,7 @@ def process_signal(signal: Dict[str, Any]) -> None:
         print("Signal confidence below threshold. Ignoring.")
         return
 
-    # 2. Persist the Signal
+    # 2. Persist the Signal for Auditing
     db_conn = get_db_connection()
     try:
         persist_signal(signal, db_conn)
@@ -106,14 +115,14 @@ def process_signal(signal: Dict[str, Any]) -> None:
     finally:
         db_conn.close()
 
-    # 3. Risk Validation
+    # 3. Pre-Execution Risk Validation
     risk_validator = RiskValidator()
     if not risk_validator.is_trade_safe(portfolio_name='default', symbol=signal['asset'], quantity=TRADE_QUANTITY):
         print(f"Risk validation failed for signal {signal['signal_id']}. Trade aborted.")
         return
-    print("Risk validation passed.")
+    print("Pre-execution risk validation passed.")
 
-    # 4. Execute Trade
+    # 4. Instruct Portfolio Manager to Execute Trade
     print(f"Proceeding with trade execution for signal {signal['signal_id']}...")
     execute_trade(
         portfolio_name='default',
@@ -122,13 +131,15 @@ def process_signal(signal: Dict[str, Any]) -> None:
         quantity=TRADE_QUANTITY,
         signal_id=signal['signal_id']
     )
+    print("Trade execution instruction sent to portfolio manager.")
 
 def run_orchestrator() -> None:
-    """
-    The main loop of the orchestrator service.
+    """The main entry point and infinite loop for the orchestrator service.
 
-    It listens for aggregated signals on a Redis Stream and manages the trade
-    lifecycle for each valid signal.
+    This function establishes a connection to Redis, creates a consumer group
+    for the `aggregated_signals` stream, and enters an infinite loop. Inside the
+    loop, it blocks and waits for new signals, processing each one as it arrives
+    and acknowledging it to ensure reliable, at-least-once processing.
     """
     redis_client = get_redis_client()
     stream_name = 'aggregated_signals'
@@ -136,33 +147,37 @@ def run_orchestrator() -> None:
     worker_name = f'orchestrator_worker_{os.getpid()}'
 
     try:
+        # Create the consumer group; ignores error if it already exists.
         redis_client.xgroup_create(stream_name, group_name, id='0', mkstream=True)
     except redis.exceptions.ResponseError as e:
-        if "already exists" not in str(e):
+        if "already exists" not in str(e).lower():
             raise
 
-    print("Orchestrator is running and listening for signals...")
+    print("Orchestrator is running and listening for aggregated signals...")
     while True:
         try:
+            # Block and wait indefinitely for a new message.
             events = redis_client.xreadgroup(group_name, worker_name, {stream_name: '>'}, count=1, block=0)
             if not events:
                 continue
 
             for _, messages in events:
                 for message_id, message_data in messages:
-                    # Decode and parse the signal data from the stream
+                    # Decode and deserialize the signal data from the stream.
                     signal = {
-                        k.decode(): json.loads(v.decode()) if v.decode().startswith('{') else v.decode()
+                        k.decode(): json.loads(v.decode()) if v.decode().startswith(('{', '[')) else v.decode()
                         for k, v in message_data.items()
                     }
 
                     process_signal(signal)
 
-                    # Acknowledge the message after processing
+                    # Acknowledge the message to remove it from the pending entries list.
                     redis_client.xack(stream_name, group_name, message_id)
 
         except Exception as e:
-            print(f"An error occurred in the orchestrator main loop: {e}")
+            print(f"An unexpected error occurred in the orchestrator main loop: {e}")
+            # In a production system, add a delay before retrying.
+            time.sleep(10)
 
 if __name__ == "__main__":
     run_orchestrator()

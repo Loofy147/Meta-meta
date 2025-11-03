@@ -1,13 +1,14 @@
-"""
-Signal Generation Engine
+"""Orchestrates the generation of raw trading signals from various strategies.
 
-This module serves as the core of the signal generation system. It dynamically
-loads and executes all available trading strategies (e.g., RSI, MACD, ML-based)
-based on the central configuration.
+This module acts as the central coordinator for the signal generation process.
+It dynamically loads and executes all available trading strategies based on the
+system's central configuration, which is retrieved from the database.
 
-It iterates through the enabled strategies, collects their individual signals,
-and returns a consolidated list of raw signals, which are then passed to the
-aggregator for weighting and final decision-making.
+The main function, `generate_signals`, iterates through the enabled strategies,
+invokes their respective signal generation logic, and aggregates the raw signals.
+These signals, each tagged with its source strategy and a confidence score, are
+then ready to be passed to the signal aggregator for weighting and final
+decision-making.
 """
 
 import json
@@ -15,28 +16,34 @@ import os
 import sys
 from typing import List, Dict, Any
 
-# Add the parent directory to the path to allow imports
+# Add the parent directory to the path to allow imports from sibling modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.manager import get_config
 from signals.strategies import rsi, macd, sentiment, ml_strategy
 
 def generate_signals(symbol: str = 'BTC/USDT') -> List[Dict[str, Any]]:
-    """
-    Generates a list of raw signals from all enabled trading strategies.
+    """Generates a list of raw signals from all enabled trading strategies.
 
-    This function dynamically calls the `generate_signal` function of each
-    strategy that is marked as 'enabled' in the system's configuration. It
-    filters out any neutral ('hold') signals.
+    This function serves as the primary entry point for signal generation. It
+    fetches the latest strategy configuration from the database, which specifies
+    which strategies are active. It then iterates through a hardcoded registry of
+    available strategies, calling the `generate_signal` function for each one
+    that is marked as 'enabled'.
+
+    Neutral signals (e.g., 'hold') are filtered out, and the final list contains
+    only actionable buy or sell signals.
 
     Args:
-        symbol (str): The trading symbol to generate signals for (e.g., 'BTC/USDT').
+        symbol: The trading symbol for which to generate signals (e.g., 'BTC/USDT').
 
     Returns:
-        List[Dict[str, Any]]: A list of raw signal dictionaries. Each dictionary
-                              contains the strategy name, direction, confidence,
-                              and the symbol.
+        A list of raw signal dictionaries. Each dictionary includes the
+        source strategy name, the signal direction ('buy' or 'sell'), a
+        confidence score (0.0 to 1.0), and the symbol. Returns an empty
+        list if no actionable signals are generated.
     """
-    # A registry of all available strategy modules and their signal functions
+    # A registry mapping strategy names to their signal generation functions.
+    # This allows for dynamic invocation based on the configuration.
     strategies = {
         'rsi': rsi.generate_signal,
         'macd': macd.generate_signal,

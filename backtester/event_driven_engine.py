@@ -1,12 +1,15 @@
-"""
-Event-Driven Backtester
+"""Provides a high-fidelity, event-driven backtesting engine.
 
-This module provides a high-fidelity, event-driven backtesting engine. It simulates
-live market conditions by replaying historical tick or candle data from the
-database onto the system's event bus (Redis Streams). This allows all downstream
-services (feature calculation, signal generation, aggregation, portfolio management)
-to operate exactly as they would in a live environment, providing a realistic
-assessment of a strategy's performance.
+This module simulates live market conditions by replaying historical data through
+the system's event bus. It meticulously queries historical candle data from the
+database in chronological order and publishes each candle as a new event onto a
+Redis Stream.
+
+This approach allows all downstream services—such as feature calculation,
+signal generation, aggregation, and portfolio management—to operate exactly as
+they would in a live trading environment. This provides a highly realistic
+assessment of a strategy's performance, capturing the sequential and asynchronous
+nature of the live system.
 """
 
 import psycopg2
@@ -22,11 +25,12 @@ from psycopg2.extensions import connection
 load_dotenv()
 
 def get_db_connection() -> connection:
-    """
-    Establishes a connection to the PostgreSQL database.
+    """Establishes and returns a connection to the PostgreSQL database.
+
+    Uses credentials from environment variables (DB_HOST, DB_NAME, etc.).
 
     Returns:
-        psycopg2.extensions.connection: A database connection object.
+        A psycopg2 database connection object.
     """
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
@@ -36,69 +40,75 @@ def get_db_connection() -> connection:
     )
 
 def get_redis_client() -> redis.Redis:
-    """
-    Returns a Redis client instance.
+    """Establishes and returns a connection to the Redis server.
 
     Returns:
-        redis.Redis: An active client connection to the Redis server.
+        An active Redis client instance.
     """
     return redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
 
 def run_backtest(symbol: str, start_date: str, end_date: str, db_conn: Optional[connection] = None) -> None:
-    """
-    Runs an event-driven backtest by replaying historical data through the event bus.
+    """Runs an event-driven backtest by replaying historical data.
 
-    This function queries the database for historical 1-minute candle data for a
-    given symbol and date range, then publishes each candle as a trade event to the
-    'ingested_trades' Redis Stream, simulating the output of the data ingestion service.
+    This function serves as the main entry point for the backtester. It queries
+    the database for all 1-minute candles for a given symbol and date range.
+    It then iterates through each historical candle and publishes its data to
+    the `raw_trades` Redis Stream, effectively simulating the real-time data
+    ingestion process.
 
     Args:
-        symbol (str): The symbol to backtest (e.g., 'BTC/USDT').
-        start_date (str): The start date of the backtest in 'YYYY-MM-DD' format.
-        end_date (str): The end date of the backtest in 'YYYY-MM-DD' format.
-        db_conn (Optional[psycopg2.extensions.connection]): An optional, existing
-            database connection. If not provided, a new one will be created.
+        symbol: The symbol to backtest (e.g., 'BTC/USDT').
+        start_date: The start date of the backtest in 'YYYY-MM-DD' format.
+        end_date: The end date of the backtest in 'YYYY-MM-DD' format.
+        db_conn: An optional existing database connection. If not provided,
+                 a new connection will be established.
     """
-    close_conn_after = False
-    if db_conn is None:
-        db_conn = get_db_connection()
-        close_conn_after = True
-
-    redis_client = get_redis_client()
-    cursor = db_conn.cursor()
-
+    conn_provided = db_conn is not None
     try:
-        query = """
-            SELECT time, open, high, low, close, volume
-            FROM candles_1m
-            WHERE symbol = %s AND time >= %s AND time <= %s
-            ORDER BY time ASC;
-        """
-        cursor.execute(query, (symbol, start_date, end_date))
+        if not conn_provided:
+            db_conn = get_db_connection()
+        redis_client = get_redis_client()
 
-        print(f"Starting backtest for {symbol} from {start_date} to {end_date}...")
+        with db_conn.cursor() as cursor:
+            # Query for historical 1-minute candle data in chronological order.
+            query = """
+                SELECT time, open, high, low, close, volume
+                FROM candles_1m
+                WHERE symbol = %s AND time >= %s AND time < %s
+                ORDER BY time ASC;
+            """
+            cursor.execute(query, (symbol, start_date, end_date))
 
-        count = 0
-        for row in cursor.fetchall():
-            timestamp, open_price, high, low, close, volume = row
-            # The 'ingested_trades' stream expects a format similar to live trade data.
-            # We use the 'close' price of the candle as the trade price.
-            trade_event = {
-                'symbol': symbol,
-                'price': close,
-                'amount': volume,
-                'timestamp': timestamp.isoformat(),
-                'side': 'buy' # Placeholder, as candle data doesn't have a side.
-            }
-            redis_client.xadd('ingested_trades', trade_event)
-            count += 1
-            # A small sleep to simulate the asynchronous nature of a live feed.
-            time.sleep(0.001)
+            print(f"Starting event-driven backtest for {symbol} from {start_date} to {end_date}...")
 
-        print(f"Backtest finished. Published {count} events.")
+            record_count = 0
+            for row in cursor:
+                timestamp, open_price, high, low, close, volume = row
+                # To simulate the `raw_trades` stream, we format the candle data
+                # as a pseudo-trade event. The `close` price is used as the trade price.
+                trade_event = {
+                    'symbol': symbol,
+                    'price': close,
+                    'amount': volume,
+                    # Timestamp is converted to milliseconds for consistency.
+                    'timestamp': int(timestamp.timestamp() * 1000),
+                    # Side is a placeholder as candles are direction-agnostic.
+                    'side': 'buy'
+                }
+                redis_client.xadd('raw_trades', trade_event)
+                record_count += 1
+                # A minimal sleep prevents overwhelming the CPU and allows other
+                # services to process events in a more realistic sequence.
+                time.sleep(0.001)
+
+            print(f"Backtest finished. Published {record_count} historical events.")
+
+    except psycopg2.Error as e:
+        print(f"Database error during backtest: {e}")
+    except redis.RedisError as e:
+        print(f"Redis error during backtest: {e}")
     finally:
-        cursor.close()
-        if close_conn_after:
+        if db_conn and not conn_provided:
             db_conn.close()
 
 if __name__ == '__main__':

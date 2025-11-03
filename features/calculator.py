@@ -1,14 +1,15 @@
-"""
-Event-Driven Feature Calculator
+"""An event-driven service for calculating technical analysis features.
 
-This service is a data-driven consumer that listens for new OHLCV candles on the
-event bus (e.g., 'candles_1m', 'candles_5m'). Upon receiving a new candle, it
-calculates a suite of technical analysis indicators (features) such as RSI,
-MACD, and Bollinger Bands.
+This service is a consumer of the candle data streams (e.g., 'candles_1m',
+'candles_5m') on the Redis event bus. When a new OHLCV candle is received, it
+calculates a suite of technical analysis indicators (features) using the
+`pandas_ta` library. The supported indicators include RSI, MACD, and
+Bollinger Bands.
 
-The calculated features are then persisted to the corresponding 'features' table
-in the TimescaleDB database, creating a rich feature store that can be used by
-the signal generation engine.
+The calculated features are then persisted to the corresponding features table
+(e.g., 'features_1m') in the TimescaleDB database. This creates a rich,
+multi-timeframe feature store that is used by the downstream signal generation
+engine to make trading decisions.
 """
 
 import psycopg2
@@ -18,6 +19,7 @@ import redis
 import json
 import os
 import sys
+import time
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 from psycopg2.extensions import connection
@@ -25,11 +27,12 @@ from psycopg2.extensions import connection
 load_dotenv()
 
 def get_db_connection() -> connection:
-    """
-    Establishes and returns a connection to the PostgreSQL database.
+    """Establishes and returns a connection to the PostgreSQL database.
+
+    Uses credentials from environment variables (DB_HOST, DB_NAME, etc.).
 
     Returns:
-        psycopg2.extensions.connection: A database connection object.
+        A psycopg2 database connection object.
     """
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
@@ -39,37 +42,50 @@ def get_db_connection() -> connection:
     )
 
 def process_candles(candles: List[Dict[str, Any]], timeframe: str, conn: connection) -> None:
-    """
-    Calculates and stores technical features for a batch of candles.
+    """Calculates and stores technical features for a batch of candles.
+
+    This function takes a list of candle data, converts it into a pandas
+    DataFrame, and then uses the `pandas_ta` library to calculate technical
+    indicators. It iterates through each symbol's data, calculates features,
+    and then upserts the results into the appropriate TimescaleDB table.
+
+    Note: To calculate indicators that require a lookback period (like a
+    14-period RSI), this function would need to be extended to fetch historical
+    data from the database to prepend to the incoming candle data. The current
+    implementation calculates features only on the given batch.
 
     Args:
-        candles (List[Dict[str, Any]]): A list of candle data dictionaries.
-        timeframe (str): The timeframe of the candles (e.g., '1m', '5m').
-        conn (psycopg2.extensions.connection): An active database connection.
+        candles: A list of candle data dictionaries.
+        timeframe: The timeframe of the candles (e.g., '1m', '5m'), which
+            determines the target database table.
+        conn: An active psycopg2 database connection object.
     """
     if not candles:
         return
 
-    df = pd.DataFrame(candles).set_index('time')
+    df = pd.DataFrame(candles)
+    df['time'] = pd.to_datetime(df['time'])
+    df = df.set_index('time')
+
 
     for symbol, group in df.groupby('symbol'):
         # --- Feature Calculation using pandas_ta ---
-        # Ensure data is sorted by time before calculating indicators
+        # For accurate TA, data must be sorted chronologically.
         group = group.sort_index()
 
-        # Calculate RSI
+        # Calculate a suite of technical indicators and append them as columns.
         group.ta.rsi(length=14, append=True)
-        # Calculate MACD
         group.ta.macd(fast=12, slow=26, signal=9, append=True)
-        # Calculate Bollinger Bands
         group.ta.bbands(length=20, std=2, append=True)
         # ----------------------------------------
 
         # --- Database Upsert ---
         with conn.cursor() as cursor:
+            # Iterate through the DataFrame rows to insert/update feature data.
             for index, row in group.iterrows():
-                # Only store rows where indicators have been successfully calculated
-                if not pd.isna(row['RSI_14']):
+                # Only store rows where indicators have been successfully calculated.
+                # RSI is a good proxy for this, as it's one of the first to be calculated.
+                if not pd.isna(row.get('RSI_14')):
                     table_name = f"features_{timeframe}"
                     cursor.execute(f"""
                         INSERT INTO {table_name} (time, symbol, rsi, macd, macds, macdh, bb_lower, bb_mid, bb_upper)
@@ -84,27 +100,28 @@ def process_candles(candles: List[Dict[str, Any]], timeframe: str, conn: connect
                         row.get('BBL_20_2.0'), row.get('BBM_20_2.0'), row.get('BBU_20_2.0')
                     ))
         conn.commit()
-        print(f"[{symbol}] Upserted {len(group)} features for {timeframe} timeframe.")
+        print(f"[{symbol}] Upserted features for {len(group)} candles in {timeframe} timeframe.")
 
 def run_feature_calculator() -> None:
-    """
-    The main loop for the feature calculator service.
+    """The main entry point and infinite loop for the feature calculator.
 
-    It continuously listens for new candles on all configured timeframe streams,
-    processes them in batches, and stores the resulting features.
+    This function establishes connections to Redis and PostgreSQL. It then
+    creates the necessary Redis consumer groups for each candle stream timeframe.
+    It enters an infinite loop, polling each stream for new candle events,
+    processing them in batches, and acknowledging them upon success.
     """
     redis_client = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
     conn = get_db_connection()
     timeframes = ['1m', '5m', '15m', '1h']
 
-    # Create consumer groups for each timeframe stream
+    # Create a consumer group for each timeframe stream we need to process.
     for tf in timeframes:
         stream_name = f'candles_{tf}'
         group_name = f'feature_calculator_group_{tf}'
         try:
             redis_client.xgroup_create(stream_name, group_name, id='0', mkstream=True)
         except redis.exceptions.ResponseError as e:
-            if "already exists" not in str(e):
+            if "already exists" not in str(e).lower():
                 print(f"Error creating consumer group for {stream_name}: {e}")
                 raise
 
@@ -116,6 +133,7 @@ def run_feature_calculator() -> None:
                 group_name = f'feature_calculator_group_{tf}'
                 worker_name = f'feature_worker_{tf}_{os.getpid()}'
 
+                # Read a batch of messages from one of the timeframe streams.
                 events = redis_client.xreadgroup(group_name, worker_name, {stream_name: '>'}, count=100, block=1000)
                 if not events:
                     continue
@@ -132,14 +150,16 @@ def run_feature_calculator() -> None:
                         })
                         message_ids.append(message_id)
 
-                process_candles(candles, tf, conn)
+                if candles:
+                    process_candles(candles, tf, conn)
 
                 if message_ids:
                     redis_client.xack(stream_name, group_name, *message_ids)
 
         except Exception as e:
             print(f"An error occurred in the feature calculator main loop: {e}")
-            conn.rollback()
+            if conn:
+                conn.rollback()
             time.sleep(10)
 
 if __name__ == "__main__":

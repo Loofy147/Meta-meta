@@ -50,6 +50,10 @@ services:
     extends: app_base
     command: python orchestrator/main.py
 
+  risk_manager:
+    extends: app_base
+    command: python risk/manager_service.py
+
   dashboard:
     extends: app_base
     command: uvicorn dashboard.main:app --host 0.0.0.0 --port 8000

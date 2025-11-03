@@ -1,12 +1,23 @@
-"""
-Database Schema Extensions for Advanced Features
+"""Defines and initializes database schema extensions for advanced features.
 
-Adds new tables and indexes to support:
-- Order book analytics metrics
-- RL agent state and decisions
-- Advanced risk metrics (VaR, stress tests)
-- Arbitrage opportunities
-- Enhanced performance tracking
+This script builds upon the core database schema by adding a suite of new
+tables, indexes, views, and functions required to support the system's
+advanced capabilities. It is designed to be idempotent and can be run safely
+on an existing database.
+
+The extensions cover several key areas:
+- **Order Book Analytics**: Tables for storing high-frequency order book
+  metrics like imbalance, VPIN, and liquidity scores.
+- **Reinforcement Learning**: Tables for logging RL agent decisions, tracking
+  episode performance, and managing dynamically updated strategy weights.
+- **Enterprise Risk Management**: Tables for historical VaR calculations,
+  stress test results, and a log of risk alerts and violations.
+- **Arbitrage Detection**: Tables for logging cross-exchange arbitrage
+  opportunities and monitoring the health of exchange data feeds.
+- **Enhanced Performance Tracking**: Detailed tables for closed trades,
+  portfolio snapshots, and aggregated performance metrics over various periods.
+- **System Monitoring**: Tables for tracking the health of individual
+  microservices and logging critical system-wide events.
 """
 
 import psycopg2
@@ -18,7 +29,13 @@ load_dotenv()
 
 
 def get_db_connection() -> connection:
-    """Establishes database connection"""
+    """Establishes and returns a connection to the PostgreSQL database.
+
+    Uses credentials from environment variables (DB_HOST, DB_NAME, etc.).
+
+    Returns:
+        A psycopg2 database connection object.
+    """
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
         database=os.getenv("DB_NAME", "postgres"),
@@ -28,9 +45,14 @@ def get_db_connection() -> connection:
 
 
 def create_advanced_schema():
-    """Creates all new tables for advanced features"""
+    """Creates all new tables, views, and functions for advanced features.
+
+    This function connects to the database and executes a series of DDL
+    (Data Definition Language) commands to create the required schema extensions.
+    It is wrapped in a transaction to ensure atomicity.
+    """
     conn = get_db_connection()
-    
+
     try:
         with conn.cursor() as cursor:
             print("Creating advanced schema extensions...")

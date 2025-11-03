@@ -1,9 +1,8 @@
-"""
-Event Bus Publisher
+"""Provides a class for publishing events to the Redis Streams event bus.
 
-This module provides a simple, reusable class for publishing events to the
-system's event bus, which is implemented using Redis Streams. It abstracts away
-the details of the Redis connection and data serialization.
+This module simplifies the process of sending structured event data to Redis
+Streams, handling connection management and data serialization automatically.
+It is a core component of the system's event-driven architecture.
 """
 
 import redis
@@ -15,17 +14,24 @@ from typing import Dict, Any
 load_dotenv()
 
 class EventPublisher:
-    """
-    A class for publishing events to a Redis Stream.
+    """A client for publishing events to a Redis Stream.
 
-    This publisher handles the connection to Redis and ensures that event data
-    is correctly serialized before being published.
+    This publisher handles the connection to Redis and serializes event data
+    into a format suitable for Redis Streams. It is designed to be instantiated
+    wherever an event needs to be published.
+
+    Attributes:
+        redis_client: An instance of the Redis client.
     """
     def __init__(self):
-        """
-        Initializes the EventPublisher and connects to the Redis server.
+        """Initializes the EventPublisher and connects to Redis.
 
-        Connection parameters are sourced from environment variables.
+        Establishes a connection to the Redis server using credentials from
+        environment variables (REDIS_HOST, REDIS_PORT). It verifies the
+        connection by sending a PING command.
+
+        Raises:
+            ConnectionError: If the connection to Redis fails.
         """
         try:
             self.redis_client = redis.Redis(
@@ -39,16 +45,15 @@ class EventPublisher:
             raise ConnectionError(f"Failed to connect to Redis: {e}")
 
     def publish(self, stream_name: str, event_data: Dict[str, Any]) -> None:
-        """
-        Publishes an event to the specified Redis Stream.
+        """Publishes an event to the specified Redis Stream.
 
         The event data dictionary is serialized into a format suitable for Redis
-        Streams (a flat dictionary of bytes). Nested dictionaries and lists are
-        JSON-encoded.
+        Streams, which is a flat dictionary of bytes. Nested dictionaries and
+        lists are automatically JSON-encoded to strings.
 
         Args:
-            stream_name (str): The name of the Redis Stream to publish to.
-            event_data (Dict[str, Any]): The event data to publish.
+            stream_name: The name of the Redis Stream to publish to (e.g., 'raw_trades').
+            event_data: A dictionary containing the event data to publish.
         """
         try:
             # Redis streams require a flat dictionary of bytes or strings.
