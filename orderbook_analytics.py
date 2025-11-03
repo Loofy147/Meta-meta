@@ -1,12 +1,20 @@
-"""
-Advanced Order Book Analytics Engine
+"""Provides an advanced engine for market microstructure analysis.
 
-This module implements sophisticated market microstructure analysis including:
-- Level 2/3 order book reconstruction
-- Order flow imbalance detection
-- Liquidity heatmaps
-- VWAP/TWAP execution quality metrics
-- Trade flow toxicity indicators (VPIN)
+This module implements a sophisticated `OrderBookAnalyzer` class that processes
+real-time Level 2 order book data to derive alpha-generating insights. It goes
+beyond simple price and volume indicators to model the underlying dynamics of
+supply and demand.
+
+The key metrics calculated include:
+- **Order Flow Imbalance**: Measures the net buying or selling pressure by
+  comparing the volume on the bid and ask sides of the book.
+- **VPIN (Volume-synchronized Probability of Informed Trading)**: An advanced
+  indicator that estimates the probability of trading activity being driven by
+  informed traders, which often precedes significant price moves.
+- **Trade Flow Toxicity**: Measures the risk of adverse selection by analyzing
+  the price impact of recent trades.
+- **Liquidity Score**: A composite score that quantifies the current state of
+  market liquidity based on depth, spread, and depth distribution.
 """
 
 import numpy as np
@@ -26,289 +34,233 @@ load_dotenv()
 
 @dataclass
 class OrderBookSnapshot:
-    """Represents a point-in-time order book state"""
+    """Represents a single, point-in-time snapshot of an order book."""
     timestamp: pd.Timestamp
-    bids: List[Tuple[float, float]]  # [(price, size), ...]
-    asks: List[Tuple[float, float]]
+    bids: List[Tuple[float, float]]  # List of (price, size) tuples
+    asks: List[Tuple[float, float]]  # List of (price, size) tuples
     mid_price: float
     spread: float
-    
+
 
 @dataclass
 class OrderFlowMetrics:
-    """Advanced order flow indicators"""
-    order_imbalance: float  # Buy-sell imbalance
-    vpin: float  # Volume-synchronized Probability of Informed Trading
-    pressure_index: float  # Net buying/selling pressure
-    liquidity_score: float  # Depth-weighted liquidity
-    toxicity_score: float  # Adverse selection risk
+    """A collection of advanced order flow and microstructure indicators."""
+    order_imbalance: float
+    vpin: float
+    pressure_index: float
+    liquidity_score: float
+    toxicity_score: float
 
 
 class OrderBookAnalyzer:
+    """Analyzes real-time order book data to extract market microstructure signals.
+
+    This class maintains a rolling history of order book snapshots and trades
+    to calculate a variety of advanced metrics. These metrics can then be used
+    to generate a trading signal based on the underlying order flow dynamics.
     """
-    Analyzes real-time order book data to extract alpha signals
-    from market microstructure.
-    """
-    
+
     def __init__(self, window_size: int = 50, depth_levels: int = 10):
-        """
+        """Initializes the OrderBookAnalyzer.
+
         Args:
-            window_size: Number of snapshots to maintain in history
-            depth_levels: Number of price levels to analyze on each side
+            window_size: The number of recent order book snapshots to keep in
+                the history for time-series calculations.
+            depth_levels: The number of price levels on both the bid and ask
+                sides to include in the analysis.
         """
         self.window_size = window_size
         self.depth_levels = depth_levels
         self.snapshot_history: deque = deque(maxlen=window_size)
         self.trade_history: deque = deque(maxlen=1000)
-        
+
         self.redis_client = redis.Redis(
             host=os.getenv("REDIS_HOST", "localhost"),
-            port=6379, db=0
+            port=int(os.getenv("REDIS_PORT", 6379)),
+            db=0
         )
-        
+
     def process_snapshot(self, snapshot: OrderBookSnapshot) -> OrderFlowMetrics:
-        """
-        Processes a new order book snapshot and calculates microstructure metrics.
-        
+        """Processes a new snapshot and calculates all microstructure metrics.
+
+        This is the main entry point for the analyzer. When a new order book
+        update is received, this method is called to compute the latest set
+        of order flow metrics.
+
         Args:
-            snapshot: Current order book state
-            
+            snapshot: The latest `OrderBookSnapshot` to be processed.
+
         Returns:
-            OrderFlowMetrics containing calculated indicators
+            An `OrderFlowMetrics` object containing all the calculated indicators.
         """
         self.snapshot_history.append(snapshot)
-        
+
         if len(self.snapshot_history) < 2:
             return self._default_metrics()
-        
-        # Calculate Order Imbalance (OI)
-        order_imbalance = self._calculate_order_imbalance(snapshot)
-        
-        # Calculate VPIN (Volume-synchronized Probability of Informed Trading)
-        vpin = self._calculate_vpin()
-        
-        # Calculate net pressure from recent trades
-        pressure_index = self._calculate_pressure_index()
-        
-        # Calculate liquidity score
-        liquidity_score = self._calculate_liquidity_score(snapshot)
-        
-        # Calculate trade toxicity (adverse selection risk)
-        toxicity_score = self._calculate_toxicity_score()
-        
+
         return OrderFlowMetrics(
-            order_imbalance=order_imbalance,
-            vpin=vpin,
-            pressure_index=pressure_index,
-            liquidity_score=liquidity_score,
-            toxicity_score=toxicity_score
+            order_imbalance=self._calculate_order_imbalance(snapshot),
+            vpin=self._calculate_vpin(),
+            pressure_index=self._calculate_pressure_index(),
+            liquidity_score=self._calculate_liquidity_score(snapshot),
+            toxicity_score=self._calculate_toxicity_score()
         )
-    
+
     def _calculate_order_imbalance(self, snapshot: OrderBookSnapshot) -> float:
-        """
-        Calculates order book imbalance using volume-weighted depth.
-        
-        OI = (Bid Volume - Ask Volume) / (Bid Volume + Ask Volume)
-        
-        Returns value in [-1, 1] where:
-        - Positive: More buying pressure
-        - Negative: More selling pressure
+        """Calculates the volume-weighted order book imbalance.
+
+        Formula: OI = (Bid Volume - Ask Volume) / (Bid Volume + Ask Volume)
+
+        Returns a value in the range [-1, 1], where a positive value indicates
+        stronger buying pressure and a negative value indicates stronger
+        selling pressure.
         """
         bid_volume = sum(size for _, size in snapshot.bids[:self.depth_levels])
         ask_volume = sum(size for _, size in snapshot.asks[:self.depth_levels])
-        
+
         total_volume = bid_volume + ask_volume
-        if total_volume == 0:
-            return 0.0
-        
-        return (bid_volume - ask_volume) / total_volume
-    
+        return (bid_volume - ask_volume) / total_volume if total_volume > 0 else 0.0
+
     def _calculate_vpin(self) -> float:
-        """
-        Calculates Volume-synchronized Probability of Informed Trading (VPIN).
-        
-        VPIN estimates the probability that informed traders are active,
-        using the imbalance of buyer vs seller initiated volume.
-        
-        Higher VPIN suggests more toxic order flow (informed trading).
+        """Calculates the Volume-synchronized Probability of Informed Trading (VPIN).
+
+        VPIN is a sophisticated measure that estimates the probability of
+        informed traders being active in the market by analyzing the imbalance
+        of buyer-initiated versus seller-initiated volume. A high VPIN value
+        is often considered a leading indicator of increased volatility or a
+        potential market reversal due to "toxic" order flow.
         """
         if len(self.trade_history) < 50:
             return 0.0
-        
-        # Classify trades as buy or sell initiated
-        buy_volume = 0.0
-        sell_volume = 0.0
-        
-        for trade in list(self.trade_history)[-50:]:
-            if trade['side'] == 'buy':
-                buy_volume += trade['amount']
-            else:
-                sell_volume += trade['amount']
-        
+
+        trades = list(self.trade_history)[-50:]
+        buy_volume = sum(trade['amount'] for trade in trades if trade['side'] == 'buy')
+        sell_volume = sum(trade['amount'] for trade in trades if trade['side'] == 'sell')
+
         total_volume = buy_volume + sell_volume
-        if total_volume == 0:
-            return 0.0
-        
-        # VPIN is the absolute volume imbalance
-        vpin = abs(buy_volume - sell_volume) / total_volume
-        return vpin
-    
+        return abs(buy_volume - sell_volume) / total_volume if total_volume > 0 else 0.0
+
     def _calculate_pressure_index(self) -> float:
-        """
-        Calculates net buying/selling pressure from recent trade flow.
-        
-        Uses exponentially weighted moving average to give more weight
-        to recent trades.
+        """Calculates the net buying/selling pressure from recent trade flow.
+
+        This method uses an exponentially weighted moving average of trade
+        volumes, signed by their direction (buy/sell), to give more weight to
+        the most recent trades. The result is normalized to the range [-1, 1].
         """
         if len(self.trade_history) < 10:
             return 0.0
-        
+
         recent_trades = list(self.trade_history)[-50:]
-        weights = np.exp(np.linspace(-2, 0, len(recent_trades)))
-        
+        weights = np.exp(np.linspace(-2, 0, len(recent_trades))) # Exponential weights
+
         pressure = 0.0
         for i, trade in enumerate(recent_trades):
             multiplier = 1.0 if trade['side'] == 'buy' else -1.0
             pressure += multiplier * trade['amount'] * weights[i]
-        
-        # Normalize
-        return np.tanh(pressure / (np.sum(weights) + 1e-8))
-    
+
+        return np.tanh(pressure / (np.sum(weights) + 1e-9)) # Normalize with tanh
+
     def _calculate_liquidity_score(self, snapshot: OrderBookSnapshot) -> float:
+        """Calculates a composite score representing market liquidity.
+
+        The score combines three factors:
+        1.  **Depth**: The total volume available at the best bid and ask prices.
+        2.  **Spread**: The tightness of the bid-ask spread.
+        3.  **Distribution**: The evenness of volume distribution across the top
+            price levels of the order book.
+
+        A higher score indicates better, more stable liquidity.
         """
-        Calculates a composite liquidity score based on:
-        - Total depth at best prices
-        - Spread tightness
-        - Depth distribution across levels
-        
-        Higher score = better liquidity
-        """
-        # Component 1: Depth at touch
         bid_depth = snapshot.bids[0][1] if snapshot.bids else 0
         ask_depth = snapshot.asks[0][1] if snapshot.asks else 0
-        depth_score = min(bid_depth + ask_depth, 100) / 100  # Normalize
-        
-        # Component 2: Spread tightness (inverse of spread)
-        spread_score = 1.0 / (1.0 + snapshot.spread / snapshot.mid_price * 10000)  # bps
-        
-        # Component 3: Depth distribution (lower is better)
+        depth_score = min((bid_depth + ask_depth) / 100.0, 1.0) # Normalize against a reference value
+
+        spread_bps = (snapshot.spread / snapshot.mid_price) * 10000
+        spread_score = 1.0 / (1.0 + spread_bps)
+
         bid_sizes = [size for _, size in snapshot.bids[:self.depth_levels]]
         ask_sizes = [size for _, size in snapshot.asks[:self.depth_levels]]
-        
+        distribution_score = 0.5
         if len(bid_sizes) > 1 and len(ask_sizes) > 1:
-            bid_cv = np.std(bid_sizes) / (np.mean(bid_sizes) + 1e-8)
-            ask_cv = np.std(ask_sizes) / (np.mean(ask_sizes) + 1e-8)
+            bid_cv = np.std(bid_sizes) / (np.mean(bid_sizes) + 1e-9)
+            ask_cv = np.std(ask_sizes) / (np.mean(ask_sizes) + 1e-9)
             distribution_score = 1.0 / (1.0 + (bid_cv + ask_cv) / 2)
-        else:
-            distribution_score = 0.5
-        
-        # Weighted combination
-        liquidity_score = 0.4 * depth_score + 0.4 * spread_score + 0.2 * distribution_score
-        return liquidity_score
-    
+
+        return 0.4 * depth_score + 0.4 * spread_score + 0.2 * distribution_score
+
     def _calculate_toxicity_score(self) -> float:
-        """
-        Estimates trade toxicity (adverse selection risk) by measuring
-        price impact of recent trades.
-        
-        High toxicity indicates informed traders are active, which can
-        signal upcoming price movements.
+        """Estimates trade flow toxicity (adverse selection risk).
+
+        This score measures the price impact of recent trades. High toxicity
+        suggests that informed traders are active, which can be a precursor to
+        significant price movements as the market absorbs new information.
         """
         if len(self.snapshot_history) < 10 or len(self.trade_history) < 10:
             return 0.0
-        
-        # Calculate realized price impact of recent trades
+
         impacts = []
         recent_trades = list(self.trade_history)[-20:]
-        
         for i, trade in enumerate(recent_trades):
-            # Find nearest snapshot after trade
-            trade_time = pd.Timestamp(trade['timestamp'], unit='ms')
-            
-            # Simple impact: price change in direction of trade
             if i < len(recent_trades) - 1:
-                next_trade = recent_trades[i + 1]
+                next_trade = recent_trades[i+1]
                 price_change = next_trade['price'] - trade['price']
-                
-                # Impact is positive if price moved in trade direction
-                if trade['side'] == 'buy':
-                    impact = price_change / trade['price']
-                else:
-                    impact = -price_change / trade['price']
-                
+                impact = (price_change if trade['side'] == 'buy' else -price_change) / trade['price']
                 impacts.append(abs(impact))
-        
+
         if not impacts:
             return 0.0
-        
-        # Average absolute impact, normalized
-        toxicity = np.mean(impacts) * 10000  # in basis points
-        return min(toxicity, 1.0)
-    
+
+        toxicity_bps = np.mean(impacts) * 10000  # Average impact in basis points
+        return min(toxicity_bps / 5.0, 1.0) # Normalize against a reference value of 5 bps
+
     def _default_metrics(self) -> OrderFlowMetrics:
-        """Returns neutral metrics when insufficient data"""
-        return OrderFlowMetrics(
-            order_imbalance=0.0,
-            vpin=0.0,
-            pressure_index=0.0,
-            liquidity_score=0.5,
-            toxicity_score=0.0
-        )
-    
+        """Returns a set of neutral default metrics when there is not enough data."""
+        return OrderFlowMetrics(0.0, 0.0, 0.0, 0.5, 0.0)
+
     def record_trade(self, trade: Dict):
-        """Records a trade for flow analysis"""
+        """Records a new trade to the internal history for flow analysis."""
         self.trade_history.append(trade)
-    
+
     def generate_alpha_signal(self, metrics: OrderFlowMetrics) -> Tuple[str, float]:
-        """
-        Generates trading signal from microstructure metrics.
-        
+        """Generates a trading signal from the combined microstructure metrics.
+
+        This method uses a multi-factor model to combine the various order flow
+        indicators into a single trading score, which is then converted into a
+        directional signal ('buy'/'sell'/'hold') and a confidence level.
+
         Returns:
-            Tuple of (direction, confidence)
+            A tuple containing the signal direction and a confidence score.
         """
-        # Multi-factor scoring
         score = 0.0
-        
-        # Order imbalance signal (mean reversion vs momentum)
-        if metrics.liquidity_score > 0.7:
-            # High liquidity: imbalance is more predictive (momentum)
-            score += metrics.order_imbalance * 0.3
-        else:
-            # Low liquidity: imbalance may mean-revert
-            score -= metrics.order_imbalance * 0.2
-        
-        # Pressure index (strong signal)
+
+        # High liquidity implies order imbalance is more likely to be momentum.
+        # Low liquidity implies it might be a temporary exhaustion to be faded.
+        score += metrics.order_imbalance * (0.3 if metrics.liquidity_score > 0.7 else -0.2)
+
+        # The pressure index is a strong indicator of short-term direction.
         score += metrics.pressure_index * 0.4
-        
-        # VPIN signal (toxic flow suggests reversal)
+
+        # High VPIN or toxicity suggests the current trend is driven by informed
+        # traders and may be prone to a reversal.
         if metrics.vpin > 0.6:
             score -= np.sign(metrics.pressure_index) * 0.2
-        
-        # Toxicity signal
         if metrics.toxicity_score > 0.5:
             score -= np.sign(metrics.pressure_index) * 0.15
-        
-        # Convert to direction and confidence
+
         direction = 'buy' if score > 0 else 'sell' if score < 0 else 'hold'
         confidence = min(abs(score), 1.0)
-        
-        # Require minimum confidence threshold
-        if confidence < 0.3:
-            return 'hold', 0.0
-        
-        return direction, confidence
+
+        return ('hold', 0.0) if confidence < 0.3 else (direction, confidence)
 
 
 def run_orderbook_strategy(symbol: str = 'BTC/USDT') -> Tuple[str, float]:
-    """
-    Main entry point for order book-based strategy.
-    
-    This would be integrated into signals/strategies/ directory.
+    """A placeholder main entry point for an order book-based strategy.
+
+    In a real implementation, this function would be integrated into the main
+    signal generation engine and would consume real-time L2 data.
     """
     analyzer = OrderBookAnalyzer()
-    
-    # In production, this would consume real-time L2 data
-    # For now, we'll return a placeholder
+    # This is a placeholder; real-time data would be fed to the analyzer here.
     return 'hold', 0.0
 
 

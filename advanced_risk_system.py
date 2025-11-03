@@ -1,13 +1,19 @@
-"""
-Enterprise Risk Management System
+"""Implements an institutional-grade enterprise risk management system.
 
-Implements institutional-grade risk metrics and controls:
-- Value at Risk (VaR) using historical, parametric, and Monte Carlo methods
-- Conditional Value at Risk (CVaR/ES) for tail risk
-- Stress testing and scenario analysis
-- Real-time correlation and covariance tracking
-- Dynamic position sizing using Kelly Criterion
-- Multi-asset portfolio risk attribution
+This module provides a suite of advanced tools for comprehensive risk analysis
+and management, far exceeding simple pre-trade validation. It includes:
+- **Value at Risk (VaR)**: Calculation using historical, parametric, and
+  Monte Carlo simulation methods to estimate potential losses.
+- **Conditional Value at Risk (CVaR)**: Also known as Expected Shortfall (ES),
+  this measures the average loss in the worst-case scenarios, providing a
+  better view of tail risk than VaR alone.
+- **Stress Testing**: A scenario analysis framework to model portfolio
+  performance under extreme, predefined market shocks (e.g., flash crashes,
+  financial crises).
+- **Kelly Criterion Optimization**: A sophisticated method for dynamic and
+  optimal position sizing to maximize long-term portfolio growth.
+- **Real-Time Monitoring**: A "circuit breaker" system that continuously checks
+  risk limits and can trigger automated risk-reduction actions.
 """
 
 import numpy as np
@@ -25,176 +31,214 @@ load_dotenv()
 
 
 class PortfolioRiskAnalyzer:
+    """Performs comprehensive risk analysis for multi-asset portfolios.
+
+    This class provides methods to calculate various industry-standard risk
+    metrics, including different types of Value at Risk (VaR) and Conditional
+    Value at Risk (CVaR). It can analyze both single positions and entire
+    portfolios, accounting for asset correlations.
     """
-    Comprehensive risk analysis for multi-asset portfolios.
-    """
-    
+
     def __init__(self, confidence_level: float = 0.95, horizon_days: int = 1):
-        """
+        """Initializes the PortfolioRiskAnalyzer.
+
         Args:
-            confidence_level: Confidence level for VaR/CVaR (e.g., 0.95 = 95%)
-            horizon_days: Risk horizon in days
+            confidence_level: The confidence level for VaR and CVaR calculations
+                (e.g., 0.95 for a 95% confidence level).
+            horizon_days: The time horizon in days over which to calculate risk.
         """
+        if not (0 < confidence_level < 1):
+            raise ValueError("Confidence level must be between 0 and 1.")
         self.confidence_level = confidence_level
         self.horizon_days = horizon_days
         self.alpha = 1 - confidence_level
-        
-    def calculate_var_historical(
-        self,
-        returns: pd.Series,
-        position_value: float
-    ) -> float:
-        """
-        Historical VaR using actual return distribution.
-        
+
+    def calculate_var_historical(self, returns: pd.Series, position_value: float) -> float:
+        """Calculates Historical Value at Risk (VaR).
+
+        This non-parametric method uses the actual historical distribution of
+        returns to determine the worst-case loss at a given confidence level.
+
         Args:
-            returns: Historical returns series
-            position_value: Current position value
-            
+            returns: A pandas Series of historical daily returns for the asset.
+            position_value: The current dollar value of the position.
+
         Returns:
-            VaR in dollar terms
+            The estimated Value at Risk in dollar terms. Returns 0.0 if there is
+            insufficient historical data.
         """
-        if len(returns) < 100:
+        if len(returns) < 100:  # Need sufficient data for a reliable estimate
             return 0.0
-        
-        # Scale returns to horizon
+
+        # Scale returns to the desired risk horizon
         scaled_returns = returns * np.sqrt(self.horizon_days)
-        
-        # Calculate VaR at specified percentile
+
+        # The VaR is the loss at the alpha-th percentile of the historical distribution
         var_percentile = np.percentile(scaled_returns, self.alpha * 100)
         var_dollar = abs(var_percentile * position_value)
-        
+
         return var_dollar
-    
-    def calculate_var_parametric(
-        self,
-        returns: pd.Series,
-        position_value: float
-    ) -> float:
-        """
-        Parametric VaR assuming normal distribution.
-        
-        Faster but less accurate for fat-tailed distributions.
+
+    def calculate_var_parametric(self, returns: pd.Series, position_value: float) -> float:
+        """Calculates Parametric Value at Risk (VaR), assuming a normal distribution.
+
+        This method is computationally faster but may be less accurate if the
+        asset's returns are not normally distributed (e.g., they have "fat tails").
+
+        Args:
+            returns: A pandas Series of historical daily returns.
+            position_value: The current dollar value of the position.
+
+        Returns:
+            The estimated Value at Risk in dollar terms.
         """
         if len(returns) < 30:
             return 0.0
-        
+
         mean = returns.mean()
         std = returns.std()
-        
-        # Scale to horizon
+
+        # Scale mean and standard deviation to the risk horizon
         horizon_mean = mean * self.horizon_days
         horizon_std = std * np.sqrt(self.horizon_days)
-        
-        # Z-score for confidence level
+
+        # Z-score for the given confidence level from the normal distribution
         z_score = stats.norm.ppf(self.alpha)
-        
+
         var_return = horizon_mean + z_score * horizon_std
         var_dollar = abs(var_return * position_value)
-        
+
         return var_dollar
-    
-    def calculate_var_monte_carlo(
-        self,
-        returns: pd.Series,
-        position_value: float,
-        n_simulations: int = 10000
-    ) -> float:
-        """
-        Monte Carlo VaR using bootstrap simulation.
-        
-        Most accurate but computationally expensive.
+
+    def calculate_var_monte_carlo(self, returns: pd.Series, position_value: float, n_simulations: int = 10000) -> float:
+        """Calculates Value at Risk (VaR) using Monte Carlo simulation.
+
+        This method simulates thousands of possible future price paths by
+        randomly sampling from the historical returns (bootstrapping). It is
+        computationally intensive but can be more accurate than parametric VaR
+        for complex return distributions.
+
+        Args:
+            returns: A pandas Series of historical daily returns.
+            position_value: The current dollar value of the position.
+            n_simulations: The number of simulation paths to generate.
+
+        Returns:
+            The estimated Value at Risk in dollar terms.
         """
         if len(returns) < 50:
             return 0.0
-        
-        # Simulate future returns by sampling from historical distribution
+
+        # Simulate future returns by randomly sampling from the historical distribution
         simulated_returns = np.random.choice(
-            returns.values,
+            returns.dropna().values,
             size=(n_simulations, self.horizon_days),
             replace=True
         )
-        
-        # Calculate cumulative returns for each path
+
+        # Calculate the cumulative return for each simulated path
         cumulative_returns = (1 + simulated_returns).prod(axis=1) - 1
-        
-        # VaR is the percentile of losses
+
+        # VaR is the percentile of the distribution of simulated losses
         var_percentile = np.percentile(cumulative_returns, self.alpha * 100)
         var_dollar = abs(var_percentile * position_value)
-        
+
         return var_dollar
-    
-    def calculate_cvar(
-        self,
-        returns: pd.Series,
-        position_value: float
-    ) -> float:
-        """
-        Conditional Value at Risk (Expected Shortfall).
-        
-        Average loss beyond the VaR threshold - better measure of tail risk.
+
+    def calculate_cvar(self, returns: pd.Series, position_value: float) -> float:
+        """Calculates Conditional Value at Risk (CVaR), or Expected Shortfall.
+
+        CVaR answers the question: "If we do have a bad day (a loss exceeding
+        our VaR), what is the average expected loss on that day?" It provides a
+        better measure of tail risk than VaR alone.
+
+        Args:
+            returns: A pandas Series of historical daily returns.
+            position_value: The current dollar value of the position.
+
+        Returns:
+            The estimated Conditional Value at Risk in dollar terms.
         """
         if len(returns) < 100:
             return 0.0
-        
+
         scaled_returns = returns * np.sqrt(self.horizon_days)
-        
-        # Find VaR threshold
+
+        # First, find the VaR threshold
         var_threshold = np.percentile(scaled_returns, self.alpha * 100)
-        
-        # CVaR is average of returns below VaR
+
+        # CVaR is the average of all returns that are less than or equal to the VaR threshold
         tail_returns = scaled_returns[scaled_returns <= var_threshold]
-        
+
         if len(tail_returns) == 0:
             return 0.0
-        
+
         cvar_return = tail_returns.mean()
         cvar_dollar = abs(cvar_return * position_value)
-        
+
         return cvar_dollar
-    
-    def calculate_portfolio_var(
-        self,
-        positions: Dict[str, float],
-        returns_df: pd.DataFrame,
-        method: str = 'historical'
-    ) -> Dict[str, float]:
-        """
-        Portfolio VaR considering correlations between assets.
-        
+
+    def calculate_portfolio_var(self, positions: Dict[str, float], returns_df: pd.DataFrame) -> Dict[str, float]:
+        """Calculates portfolio-level VaR, considering asset correlations.
+
+        This method uses the variance-covariance method to calculate the total
+        VaR of a multi-asset portfolio. It also calculates the Marginal VaR for
+        each asset, which shows how much each position is contributing to the
+        overall portfolio risk.
+
         Args:
-            positions: Dict of {symbol: dollar_value}
-            returns_df: DataFrame with returns for each asset
-            method: 'historical', 'parametric', or 'monte_carlo'
-            
+            positions: A dictionary mapping asset symbols to their dollar values.
+            returns_df: A DataFrame where each column is an asset's historical
+                daily returns.
+
         Returns:
-            Dict with VaR metrics
+            A dictionary containing the total portfolio VaR, an approximation
+            of portfolio CVaR, the Marginal VaR for each asset, and the
+            diversification benefit.
         """
-        # Calculate covariance matrix
+        # Calculate the covariance matrix, scaled to the risk horizon
         cov_matrix = returns_df.cov() * self.horizon_days
-        
-        # Position weights
+
+        # Calculate position weights as a fraction of the total portfolio value
         total_value = sum(positions.values())
+        if total_value == 0:
+            return {'portfolio_var': 0, 'marginal_var': {}}
+
         weights = np.array([positions.get(col, 0) / total_value for col in returns_df.columns])
-        
-        # Portfolio variance
-        portfolio_var = weights @ cov_matrix @ weights
-        portfolio_std = np.sqrt(portfolio_var)
-        
-        # Portfolio VaR
+
+        # Portfolio variance is w' * Cov * w
+        portfolio_variance = weights.T @ cov_matrix @ weights
+        portfolio_std = np.sqrt(portfolio_variance)
+
+        # Portfolio VaR based on the normal distribution
         z_score = stats.norm.ppf(self.alpha)
         portfolio_return_var = z_score * portfolio_std
         portfolio_var_dollar = abs(portfolio_return_var * total_value)
-        
-        # Marginal VaR (contribution of each asset)
+
+        # Marginal VaR: The contribution of each asset to the total portfolio VaR
         marginal_var = {}
-        for i, symbol in enumerate(returns_df.columns):
-            if positions.get(symbol, 0) > 0:
-                marginal_contrib = (cov_matrix.iloc[:, i] @ weights) / portfolio_std
-                marginal_var[symbol] = marginal_contrib * positions[symbol] * abs(z_score)
-        
+        if portfolio_std > 0:
+            for i, symbol in enumerate(returns_df.columns):
+                if positions.get(symbol, 0) > 0:
+                    # Marginal contribution = (Cov(i) * w) / sigma_p
+                    marginal_contrib = (cov_matrix.iloc[:, i] @ weights) / portfolio_std
+                    marginal_var[symbol] = marginal_contrib * positions[symbol] * abs(z_score)
+
         return {
             'portfolio_var': portfolio_var_dollar,
+            # A common heuristic for CVaR based on normal distribution VaR
+            'portfolio_cvar_approximation': portfolio_var_dollar * 1.25,
+            'marginal_var': marginal_var,
+            'diversification_benefit': sum(marginal_var.values()) - portfolio_var_dollar if marginal_var else 0
+        }
+
+
+class StressTester:
+    """A framework for scenario analysis and stress testing of portfolios.
+
+    This class simulates how a portfolio would perform under various predefined,
+    extreme market scenarios.
+    """
             'portfolio_cvar': portfolio_var_dollar * 1.3,  # Approximation
             'marginal_var': marginal_var,
             'diversification_benefit': sum(marginal_var.values()) - portfolio_var_dollar

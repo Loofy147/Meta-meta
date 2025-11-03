@@ -1,15 +1,13 @@
-"""
-Database Schema Definition and Initialization
+"""Defines and initializes the complete database schema.
 
-This script defines the complete database schema for the trading system, including
-tables for market data, portfolio management, performance tracking, and system
-configuration. It uses TimescaleDB for time-series data to ensure high-performance
-queries.
+This script is responsible for creating all necessary tables, enabling the
+TimescaleDB extension, and converting time-series tables into hypertables
+for efficient data handling. It is designed to be idempotent, meaning it can
+be safely run multiple times without causing errors or data loss.
 
-Running this script is idempotent: it can be run multiple times without causing
-errors, as it uses 'CREATE TABLE IF NOT EXISTS' and 'ON CONFLICT' clauses. It also
-seeds the database with initial default data, such as a default portfolio and
-system configuration.
+The script also seeds the database with initial essential data, such as a
+default system configuration and a default trading portfolio, ensuring the
+application can start in a known state.
 """
 
 import psycopg2
@@ -21,11 +19,12 @@ from psycopg2.extensions import connection
 load_dotenv()
 
 def get_db_connection() -> connection:
-    """
-    Establishes and returns a connection to the PostgreSQL database.
+    """Establishes and returns a connection to the PostgreSQL database.
+
+    Uses credentials from environment variables (DB_HOST, DB_NAME, etc.).
 
     Returns:
-        psycopg2.extensions.connection: A database connection object.
+        A psycopg2 database connection object.
     """
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
@@ -35,15 +34,23 @@ def get_db_connection() -> connection:
     )
 
 def create_schema() -> None:
-    """
-    Connects to the database and creates/updates all necessary tables.
+    """Creates/updates all tables, hypertables, and seeds initial data.
 
-    This function is the main entry point for schema management. It defines and
-    creates tables for time-series data (trades, candles, features), application
-    state (portfolios, positions), and system metadata.
+    This function serves as the main entry point for database schema management.
+    It connects to the database and executes a series of SQL commands to define
+    the required tables for:
+    - Time-series market data (raw trades, candles, features).
+    - Application state (portfolios, positions).
+    - Performance tracking (strategy performance).
+    - System metadata (signals, open trades, system parameters).
+
+    It ensures the TimescaleDB extension is active and converts relevant tables
+    into hypertables. Finally, it seeds the `system_parameters` and `portfolios`
+    tables with default values.
     """
-    conn = get_db_connection()
+    conn = None  # Initialize conn to None
     try:
+        conn = get_db_connection()
         with conn.cursor() as cursor:
             print("Creating schema and tables...")
 

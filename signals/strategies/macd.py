@@ -1,10 +1,15 @@
-"""
-MACD Crossover Trading Strategy
+"""Implements a MACD crossover trading strategy.
 
-This module implements a classic trading strategy based on the Moving Average
-Convergence Divergence (MACD) indicator. It generates a 'buy' signal on a bullish
-crossover (when the MACD line crosses above the signal line) and a 'sell' signal
-on a bearish crossover (when the MACD line crosses below the signal line).
+This module provides a signal generation function based on the classic Moving
+Average Convergence Divergence (MACD) indicator. The strategy identifies
+trading opportunities by detecting crossovers between the MACD line and its
+signal line.
+
+- A **bullish crossover** (MACD line crosses above the signal line) generates a 'buy' signal.
+- A **bearish crossover** (MACD line crosses below the signal line) generates a 'sell' signal.
+
+The function queries the database for the two most recent feature sets to
+compare their MACD and signal line values.
 """
 
 import pandas as pd
@@ -17,11 +22,12 @@ from psycopg2.extensions import connection
 load_dotenv()
 
 def get_db_connection() -> connection:
-    """
-    Establishes and returns a connection to the PostgreSQL database.
+    """Establishes and returns a connection to the PostgreSQL database.
+
+    Uses credentials from environment variables (DB_HOST, DB_NAME, etc.).
 
     Returns:
-        psycopg2.extensions.connection: A database connection object.
+        A psycopg2 database connection object.
     """
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
@@ -31,46 +37,56 @@ def get_db_connection() -> connection:
     )
 
 def generate_signal(symbol: str = 'BTC/USDT') -> Tuple[str, float]:
-    """
-    Generates a trading signal based on the MACD crossover strategy.
+    """Generates a trading signal based on a MACD crossover event.
 
     This function fetches the two most recent MACD and MACD signal line values
-    from the feature store. It then checks if a crossover event has occurred
-    between the last two time periods.
+    (`macd` and `macds` columns) from the `features_1m` table for the specified
+    symbol. It then compares the state of the latest values against the previous
+    values to detect if a crossover has just occurred.
+
+    - If the MACD line was below the signal line previously and is now above it,
+      a 'buy' signal is generated.
+    - If the MACD line was above the signal line previously and is now below it,
+      a 'sell' signal is generated.
 
     Args:
-        symbol (str): The trading symbol to generate a signal for (e.g., 'BTC/USDT').
+        symbol: The trading symbol to generate a signal for (e.g., 'BTC/USDT').
 
     Returns:
-        Tuple[str, float]: A tuple containing the signal direction ('buy', 'sell',
-                           or 'hold') and a confidence score (0.0 to 1.0).
-                           A crossover event returns a moderate confidence of 0.6.
+        A tuple containing the signal direction ('buy', 'sell', or 'hold')
+        and a confidence score. A crossover event returns a moderate
+        confidence of 0.6, while no event returns 'hold' with 0.0 confidence.
     """
     conn = get_db_connection()
     try:
-        # Fetch the two most recent MACD feature sets for the given symbol.
-        # We need two points to detect a crossover.
-        query = "SELECT macd, macds FROM features_1m WHERE symbol = %s ORDER BY time DESC LIMIT 2;"
+        # Fetch the two most recent feature sets to detect a crossover event.
+        query = """
+            SELECT macd, macds FROM features_1m
+            WHERE symbol = %s AND macd IS NOT NULL AND macds IS NOT NULL
+            ORDER BY time DESC LIMIT 2;
+        """
         df = pd.read_sql(query, conn, params=(symbol,))
 
         if len(df) < 2:
-            # Not enough data to determine a crossover
+            # Not enough data to determine a crossover.
             return "hold", 0.0
 
         latest = df.iloc[0]
         previous = df.iloc[1]
 
-        # --- Crossover Logic ---
-        is_bullish_crossover = latest['macd'] > latest['macds'] and previous['macd'] <= previous['macds']
-        is_bearish_crossover = latest['macd'] < latest['macds'] and previous['macd'] >= previous['macds']
-        # ---------------------
+        # --- Crossover Detection Logic ---
+        # Bullish: Was below or equal, now is above.
+        is_bullish_crossover = previous['macd'] <= previous['macds'] and latest['macd'] > latest['macds']
+        # Bearish: Was above or equal, now is below.
+        is_bearish_crossover = previous['macd'] >= previous['macds'] and latest['macd'] < latest['macds']
+        # ---------------------------------
 
         if is_bullish_crossover:
-            return "buy", 0.6  # Moderate confidence for a crossover event
+            return "buy", 0.6  # Moderate confidence for a crossover.
         elif is_bearish_crossover:
-            return "sell", 0.6 # Moderate confidence for a crossover event
+            return "sell", 0.6 # Moderate confidence for a crossover.
         else:
-            # No crossover occurred in the last interval
+            # No crossover occurred in the latest interval.
             return "hold", 0.0
 
     except Exception as e:

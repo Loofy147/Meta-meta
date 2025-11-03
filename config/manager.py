@@ -1,12 +1,13 @@
-"""
-Configuration Manager
+"""Manages dynamic system configuration from a database source.
 
-This module provides a centralized system for managing the application's
-configuration. It retrieves settings from a dedicated 'system_parameters' table
-in the database, allowing for dynamic updates without requiring a service restart.
+This module provides a centralized interface for retrieving and updating
+the application's configuration. Settings are stored in a dedicated
+'system_parameters' table in the database, enabling dynamic updates without
+requiring a service restart.
 
-To improve performance, it uses an in-memory cache to store the configuration
-after the first read. The cache is automatically invalidated upon any updates.
+To enhance performance, it employs a global in-memory cache. The configuration
+is fetched from the database on the first request and subsequently served from
+the cache. The cache is automatically invalidated upon any updates.
 """
 
 import psycopg2
@@ -18,15 +19,16 @@ from psycopg2.extensions import connection
 
 load_dotenv()
 
-# Global in-memory cache for the configuration
+# Global in-memory cache for the configuration.
 _config_cache: Optional[Dict[str, Any]] = None
 
 def get_db_connection() -> connection:
-    """
-    Establishes and returns a connection to the PostgreSQL database.
+    """Establishes and returns a connection to the PostgreSQL database.
+
+    Uses credentials from environment variables (DB_HOST, DB_NAME, etc.).
 
     Returns:
-        psycopg2.extensions.connection: A database connection object.
+        A psycopg2 database connection object.
     """
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
@@ -36,15 +38,18 @@ def get_db_connection() -> connection:
     )
 
 def get_config() -> Dict[str, Any]:
-    """
-    Retrieves the system configuration, utilizing an in-memory cache.
+    """Retrieves the system configuration, utilizing an in-memory cache.
 
-    On the first call, it fetches the configuration from the 'system_parameters'
-    table in the database. Subsequent calls return the cached version. The cache
-    is invalidated by calling update_config().
+    On the first call, this function fetches the entire configuration object
+    from the 'system_parameters' table in the database where the key is 'config'.
+    Subsequent calls return the cached version, avoiding repeated database queries.
+    The cache is invalidated by the `update_config` function.
 
     Returns:
-        Dict[str, Any]: The system configuration as a dictionary.
+        The system configuration as a dictionary.
+
+    Raises:
+        ValueError: If the 'config' key is not found in the database.
     """
     global _config_cache
     if _config_cache is not None:
@@ -66,17 +71,22 @@ def get_config() -> Dict[str, Any]:
 
 
 def update_config(new_config: Dict[str, Any]) -> None:
-    """
-    Updates the system configuration in the database and invalidates the cache.
+    """Updates the configuration in the database and invalidates the cache.
+
+    This function serializes the provided dictionary to JSON and overwrites the
+    existing configuration in the 'system_parameters' table. It then clears the
+    global in-memory cache, ensuring that the next call to `get_config()` will
+    fetch the updated settings from the database.
 
     Args:
-        new_config (Dict[str, Any]): The new configuration dictionary to be saved.
-                                     This will overwrite the existing config.
+        new_config: The new configuration dictionary to be saved. This will
+            completely overwrite the existing configuration.
     """
     global _config_cache
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
+        # The entire config is stored in a single JSONB field.
         cursor.execute(
             "UPDATE system_parameters SET value = %s WHERE key = 'config';",
             (json.dumps(new_config),)
@@ -85,13 +95,15 @@ def update_config(new_config: Dict[str, Any]) -> None:
     finally:
         conn.close()
 
-    # Invalidate the cache to ensure the next get_config() call fetches fresh data
+    # Invalidate the cache to ensure the next get_config() call fetches fresh data.
     _config_cache = None
     print("System configuration updated successfully and cache invalidated.")
 
 def _clear_cache() -> None:
-    """
-    Forces a clear of the in-memory configuration cache.
+    """Forces a clear of the in-memory configuration cache.
+
+    This is primarily a helper function for testing purposes to ensure a clean
+    state between test cases.
     """
     global _config_cache
     _config_cache = None

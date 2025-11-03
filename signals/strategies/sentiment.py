@@ -1,13 +1,16 @@
-"""
-News Sentiment Analysis Strategy
+"""Implements a trading strategy based on news sentiment analysis using an LLM.
 
-This module implements a trading strategy that leverages a Large Language Model (LLM)
-to analyze the sentiment of recent financial news. It fetches the latest news
-headlines for a given asset from the Polygon.io API and uses an LLM to classify
-the prevailing sentiment as positive, negative, or neutral.
+This module provides a qualitative, event-driven signal by analyzing the
+sentiment of recent financial news. The process involves two main steps:
+1.  **News Fetching**: It retrieves the latest news headlines for a specific
+    asset from the Polygon.io API.
+2.  **Sentiment Analysis**: It uses a Large Language Model (LLM), accessed
+    via the OpenAI API, to classify the overall sentiment of these headlines as
+    'positive', 'negative', or 'neutral'.
 
-This provides a qualitative, event-driven signal that can complement traditional
-quantitative indicators.
+A 'positive' sentiment generates a 'buy' signal, 'negative' generates a 'sell'
+signal, and 'neutral' results in a 'hold' signal. This strategy requires both
+`POLYGON_API_KEY` and `OPENAI_API_KEY` to be set in the environment.
 """
 
 import os
@@ -17,27 +20,26 @@ from typing import Tuple, List
 from polygon import RESTClient
 from openai import OpenAI
 
-# Add the parent directory to the path to allow imports
+# Add the parent directory to the path to allow imports from sibling modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from llm.chief_analyst import get_openai_client
 
 load_dotenv()
 
 def get_latest_news(symbol: str, api_key: str, limit: int = 10) -> List[str]:
-    """
-    Fetches the latest news headlines for a given ticker symbol from Polygon.io.
+    """Fetches the latest news headlines for a symbol from Polygon.io.
 
     Args:
-        symbol (str): The base currency symbol (e.g., 'BTC').
-        api_key (str): The API key for Polygon.io.
-        limit (int): The maximum number of headlines to fetch.
+        symbol: The base currency symbol of the asset (e.g., 'BTC' for BTC/USDT).
+        api_key: The API key for authenticating with the Polygon.io service.
+        limit: The maximum number of recent headlines to fetch.
 
     Returns:
-        List[str]: A list of news headlines.
+        A list of news headline strings, or an empty list if the API call fails.
     """
     try:
         with RESTClient(api_key) as polygon_client:
-            # Polygon uses a specific format for crypto tickers, e.g., "X:BTCUSD"
+            # Polygon.io requires a specific format for crypto tickers, e.g., "X:BTCUSD".
             resp = polygon_client.get_ticker_news(ticker=f"X:{symbol}USD", limit=limit)
             return [news.title for news in resp.results]
     except Exception as e:
@@ -45,50 +47,52 @@ def get_latest_news(symbol: str, api_key: str, limit: int = 10) -> List[str]:
         return []
 
 def analyze_sentiment_with_llm(headlines: List[str], client: OpenAI) -> str:
-    """
-    Uses an LLM to analyze the sentiment of a list of headlines.
+    """Uses an LLM to determine the overall sentiment of a list of headlines.
+
+    This function constructs a prompt containing the list of headlines and asks
+    the LLM to perform a sentiment analysis, returning a single-word response.
 
     Args:
-        headlines (List[str]): The headlines to analyze.
-        client (OpenAI): An authenticated OpenAI client.
+        headlines: A list of news headlines to be analyzed.
+        client: An authenticated OpenAI API client instance.
 
     Returns:
-        str: The overall sentiment ('positive', 'negative', or 'neutral').
+        The analyzed sentiment as a lowercase string (e.g., 'positive',
+        'negative', or 'neutral').
     """
     prompt = f"""
-    **News Sentiment Analysis Request**
+    Analyze the overall market sentiment of the following financial news headlines.
+    Respond with only a single word: "positive", "negative", or "neutral".
 
-    **Recent Headlines:**
+    Headlines:
     - {"\\n- ".join(headlines)}
-
-    **Task:**
-    Analyze the overall sentiment of these financial news headlines.
-    Respond with a single word: "positive", "negative", or "neutral".
     """
 
     response = client.chat.completions.create(
         model="gpt-4-turbo",
         messages=[
-            {"role": "system", "content": "You are a financial news sentiment analyst. Your task is to determine the market sentiment from headlines."},
+            {"role": "system", "content": "You are an expert financial news sentiment analyst."},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.0 # Max determinism
+        temperature=0.0,  # Set to 0 for maximum determinism
+        max_tokens=5
     )
-    return response.choices[0].message.content.lower()
+    return response.choices[0].message.content.lower().strip()
 
 def generate_signal(symbol: str = 'BTC/USDT') -> Tuple[str, float]:
-    """
-    Generates a trading signal based on the sentiment of recent news.
+    """Generates a trading signal based on the sentiment of recent news.
 
-    This function coordinates fetching news and analyzing its sentiment to produce
-    a 'buy' signal for positive news, a 'sell' for negative, and 'hold' otherwise.
+    This function orchestrates the process of fetching news from Polygon.io and
+    analyzing its sentiment with an LLM. It translates the sentiment into a
+    corresponding trading signal ('buy' for positive, 'sell' for negative).
 
     Args:
-        symbol (str): The trading symbol to generate a signal for (e.g., 'BTC/USDT').
+        symbol: The trading symbol to generate a signal for (e.g., 'BTC/USDT').
 
     Returns:
-        Tuple[str, float]: A tuple containing the signal direction ('buy', 'sell',
-                           'hold') and a confidence score.
+        A tuple containing the signal direction ('buy', 'sell', or 'hold')
+        and a confidence score. Returns ('hold', 0.0) if API keys are missing,
+        news cannot be fetched, or sentiment analysis fails.
     """
     polygon_api_key = os.getenv("POLYGON_API_KEY")
     if not polygon_api_key:
