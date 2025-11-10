@@ -94,6 +94,32 @@ def create_schema() -> None:
                 """)
                 cursor.execute(f"SELECT create_hypertable('features_{tf}', 'time', if_not_exists => TRUE);")
 
+            # --- Advanced Time-Series Tables ---
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS orderbook_metrics (
+                    time TIMESTAMPTZ NOT NULL,
+                    symbol TEXT NOT NULL,
+                    order_imbalance DOUBLE PRECISION,
+                    vpin DOUBLE PRECISION,
+                    pressure_index DOUBLE PRECISION,
+                    liquidity_score DOUBLE PRECISION,
+                    toxicity_score DOUBLE PRECISION
+                );
+            """)
+            cursor.execute("SELECT create_hypertable('orderbook_metrics', 'time', if_not_exists => TRUE);")
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+                    time TIMESTAMPTZ NOT NULL,
+                    portfolio_name TEXT NOT NULL,
+                    portfolio_value DOUBLE PRECISION,
+                    cash_balance DOUBLE PRECISION,
+                    positions JSONB
+                );
+            """)
+            cursor.execute("SELECT create_hypertable('portfolio_snapshots', 'time', if_not_exists => TRUE);")
+
+
             # --- Application State and Metadata Tables ---
             print("Creating application state and metadata tables...")
             cursor.execute("""
@@ -144,6 +170,26 @@ def create_schema() -> None:
                 );
             """)
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS closed_trades (
+                    trade_id UUID PRIMARY KEY,
+                    portfolio_name TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    entry_price DOUBLE PRECISION,
+                    exit_price DOUBLE PRECISION,
+                    quantity DOUBLE PRECISION,
+                    pnl DOUBLE PRECISION,
+                    opened_at TIMESTAMPTZ,
+                    closed_at TIMESTAMPTZ
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS strategy_weights (
+                    strategy_name TEXT PRIMARY KEY,
+                    weight DOUBLE PRECISION,
+                    updated_at TIMESTAMPTZ
+                );
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS system_parameters (
                     key TEXT PRIMARY KEY,
                     value JSONB NOT NULL
@@ -160,7 +206,8 @@ def create_schema() -> None:
                     "rsi": {"enabled": True, "overbought_threshold": 70, "oversold_threshold": 30},
                     "macd": {"enabled": True},
                     "sentiment": {"enabled": False},
-                    "ml": {"enabled": False}
+                    "ml": {"enabled": False},
+                    "orderbook": {"enabled": True}
                 },
                 "risk_management": {
                     "max_position_size_pct": 0.1,

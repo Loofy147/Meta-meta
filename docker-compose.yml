@@ -46,6 +46,18 @@ services:
     extends: app_base
     command: python aggregator/main.py
 
+  rl_optimizer:
+    extends: app_base
+    command: python services/rl_optimizer_service.py
+
+  arbitrage_scanner:
+    extends: app_base
+    command: python services/arbitrage_scanner_service.py
+
+  arbitrage_executor:
+    extends: app_base
+    command: python services/arbitrage_executor_service.py
+
   orchestrator:
     extends: app_base
     command: python orchestrator/main.py
